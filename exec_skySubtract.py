@@ -94,12 +94,12 @@ for group in fileIndexByTarget.groups:
         # Loop through each of the repeats for this target
         for iDith in range(numDithers):
             # Compute subtracted images for each repeat
-            A1sub     = A1[iDith]
+            A1sub = A1[iDith]
+            
+            # Use the background image to set a 3-sigma detection threshold
             B1bkg     = Background(B1[iDith].arr, (100, 100), filter_shape=(3, 3),
                                    method='median')
-            # Estimate a 2D background image
-            # Use the background image to set a 3-sigma detection threshold
-            threshold = B1bkg.background + (1.0 * B1bkg.background_rms)
+            threshold = B1bkg.background + 3.0*B1bkg.background_rms
             
             # Build a mask for any sources above the 3-sigma threshold
             sigma  = 2.0 * gaussian_fwhm_to_sigma    # FWHM = 2.
@@ -111,10 +111,11 @@ for group in fileIndexByTarget.groups:
             mask   = np.logical_or((segm > 0),
                      (np.abs((B1[iDith].arr -
                       B1bkg.background)/B1bkg.background_rms) > 7.0))
-
-            # Estimate a 2D background with a finer meshing
-            B1bkg     = Background(B1[iDith].arr, (50, 50), filter_shape=(3, 3),
+            
+            # Estimate a 2D background image masking possible sources
+            B1bkg = Background(B1[iDith].arr, (100, 100), filter_shape=(3, 3),
                                    method='median', mask=mask)
+
             # Perform the actual background subtraction
             A1sub.arr = A1sub.arr - B1bkg.background
             
