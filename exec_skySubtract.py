@@ -20,7 +20,7 @@ from pyPol import Image
 delim = os.path.sep
 
 # Grab all the *.fits files in the reduced science data directory
-reducedDir = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
+reducedDir     = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
 fileList   = []
 for file in os.listdir(reducedDir):
     filePath = os.path.join(reducedDir, file)
@@ -34,6 +34,11 @@ fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileL
 fileNums = [num.split('_')[0] for num in fileNums]
 sortInds = np.argsort(np.array(fileNums, dtype = np.int))
 fileList = [fileList[ind] for ind in sortInds]
+
+# Setup new directory for polarimetry data
+polarimetryDir = reducedDir + delim + 'Polarimetry'
+if (not os.path.isdir(polarimetryDir)):
+    os.mkdir(polarimetryDir, 0o755)
 
 # Read the fileIndex back in as an astropy Table
 print('\nReading file index from disk')
@@ -94,6 +99,9 @@ for group in fileIndexByTarget.groups:
         # Loop through each of the repeats for this target
         for iDith in range(numDithers):
             # Compute subtracted images for each repeat
+            # *****************************************************************
+            # first handle (AB)BA...
+            # *****************************************************************
             A1sub = A1[iDith]
             
             # Use the background image to set a 3-sigma detection threshold
@@ -118,18 +126,75 @@ for group in fileIndexByTarget.groups:
 
             # Perform the actual background subtraction
             A1sub.arr = A1sub.arr - B1bkg.background
-            
-            pdb.set_trace()
-            
+
+            # *****************************************************************
+            # ...then handle AB(BA)
+            # *****************************************************************
             A2sub     = A2[iDith]
+            
+            # Use the background image to set a 3-sigma detection threshold
             B2bkg     = Background(B2[iDith].arr, (100, 100), filter_shape=(3, 3),
                                    method='median')
+            threshold = B2bkg.background + 3.0*B2bkg.background_rms
+            
+            # Build a mask for any sources above the 3-sigma threshold
+            sigma  = 2.0 * gaussian_fwhm_to_sigma    # FWHM = 2.
+            kernel = Gaussian2DKernel(sigma, x_size=3, y_size=3)
+            segm   = detect_sources(B2[iDith].arr, threshold, 
+                                  npixels=5, filter_kernel=kernel)
+            # Build the actual mask and include a step to capture negative
+            # saturation values
+            mask   = np.logical_or((segm > 0),
+                     (np.abs((B2[iDith].arr -
+                      B2bkg.background)/B2bkg.background_rms) > 7.0))
+            
+            # Estimate a 2D background image masking possible sources
+            B2bkg = Background(B2[iDith].arr, (100, 100), filter_shape=(3, 3),
+                                   method='median', mask=mask)
+            
+            # Perform the actual background subtraction
             A2sub.arr = A2sub.arr - B2bkg.background
-            pdb.set_trace()
+
+            # Align images
+            Aimgs = A1sub.align(A2sub)
             
-            # Write the subtracted files to disk
-            A1Filename = A1sub.filename
-            A1sub.write('test.fits')
+            # Stack and average the aligned images
+            Aimg     = A1sub.copy()
+            Aimg.arr = Image.stacked_average(Aimgs)
+
+           
+            # Clear out the old astrometry
+            del Aimg.header['WCSAXES']
+            del Aimg.header['PC*']
+            del Aimg.header['CDELT*']
+            del Aimg.header['CUNIT*']
+            del Aimg.header['*POLE']
+            Aimg.header['CRPIX*'] = 1.0
+            Aimg.header['CRVAL*'] = 1.0
+            Aimg.header['CTYPE*'] = 'Linear Binned ADC Pixels'
+            Aimg.header['NAXIS1'] = Aimg.arr.shape[1]
+            Aimg.header['NAXIS2'] = Aimg.arr.shape[0]
+ 
+           # I can only "redo the astrometry" if the file is written to disk
+            Aimg.filename = 'tmp.fits'
+            Aimg.write()
+           
+            # Solve the stacked image astrometry
+            success  = Aimg.astrometry()
             
-        pdb.set_trace()
-        
+            if success:
+                # Write the subtracted files to disk
+                A1Filename = A1sub.filename.split(delim)
+                A1Filename.reverse()
+                A1Filename = polarimetryDir + delim + A1Filename[0]
+                A1sub.write(A1Filename)
+                
+                A2Filename = A2sub.filename.split(delim)
+                A2Filename.reverse()
+                A2Filename = polarimetryDir + delim + A2Filename[0]
+                A2sub.write(A2Filename)
+                pdb.set_trace()
+            else:
+                print('astrometry failed?!')
+                pdb.set_trace()
+            

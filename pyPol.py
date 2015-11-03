@@ -1,11 +1,15 @@
 import pdb
+import psutil
 import time
 import numpy as np
+from scipy import ndimage
 import scipy.stats
 import matplotlib.pyplot as plt
 import os
 from astropy.io import fits
 from astropy.wcs import WCS
+from astropy.coordinates import SkyCoord
+from astropy.wcs.utils import pixel_to_skycoord, skycoord_to_pixel
 
 class Image(object):
     """An object which stores an image array and header and provides a
@@ -72,6 +76,156 @@ class Image(object):
     # TODO define a subtraction method for image array
     # test for if it's another image or a similarly sized array
     
+    def shift(self, dx, dy):
+        """A method to shift the image dx pixels to the right and dy pixels up.
+        This method will conserve flux!
+        
+        parameters;
+        dx -- number of pixels to shift right (negative is left)
+        dy -- number of pixels to shift up (negative is down)
+        """
+        
+        # Define the (before, after) padding pairs for integer shifts
+        shiftX = np.int(np.ceil(np.abs(dx)))
+        shiftY = np.int(np.ceil(np.abs(dy)))
+        if dx > 0:
+            padLf  = (shiftX - 1, 1)
+            padRt  = (shiftX, 0)
+        elif dx < 0:
+            padLf  = (0, shiftX)
+            padRt  = (1, shiftX - 1)
+        else:
+            padLf  = (0,0)
+            padRt  = (0,0)
+        
+        if dy > 0:
+            padBot = (shiftY - 1, 1)
+            padTop = (shiftY, 0)
+        elif dy < 0:
+            padBot = (0, shiftY)
+            padTop = (1, shiftY - 1)
+        else:
+            padBot = (0,0)
+            padTop = (0,0)
+        
+        # Create the padding shifted versions of the array
+        img00 = np.pad(self.arr,
+                       (padBot, padLf), mode='constant')
+        img01 = np.pad(self.arr,
+                       (padTop, padLf), mode='constant')
+        img10 = np.pad(self.arr,
+                       (padBot, padRt), mode='constant')
+        img11 = np.pad(self.arr,
+                       (padTop, padRt), mode='constant')
+        
+        # Now compute the output image
+        fracX = shiftX - np.abs(dx)
+        fracY = shiftY - np.abs(dy)
+        imgOut = (fracX*(1-fracY))*img00 + \
+                 ((1-fracX)*(1-fracY))*img10 + \
+                 (fracX*fracY)*img01 + \
+                 ((1-fracX)*fracY)*img11
+        
+        # ...and slice off the padded portions
+        ny, nx = imgOut.shape
+        if dx > 0:
+            imgOut = imgOut[:,:(nx-shiftX)]
+        elif dx < 0:
+            imgOut = imgOut[:,shiftX:]
+        
+        if dy > 0:
+            imgOut = imgOut[:(ny-shiftY),:]
+        elif dy < 0:
+            imgOut = imgOut[shiftY:,:]
+        
+        # Check that things are still working correctly
+        if imgOut.shape != self.arr.shape:
+            pdb.set_trace()
+        
+        # Replace theimage array with the shifted version
+        self.arr = imgOut
+        
+
+    def align(self, img):
+        """A method to align the self image with an other image
+        using the astrometry from each header to shift an INTEGER
+        number of pixels.
+        
+        parameters:
+        img -- the image with which self will be aligned
+        """
+        # Align self image with img image
+        
+        # Grab self image WCS and pixel center
+        wcs1   = WCS(self.header)
+        x1, y1 = self.arr.shape[0]//2, self.arr.shape[1]//2
+        
+        # Convert pixels to sky coordinates
+        skyCoord1 = pixel_to_skycoord(x1, y1, wcs1, origin=0, mode='wcs', cls=None)
+
+        # Grab the WCS of the alignment image and convert back to pixels
+        wcs2   = WCS(img.header)
+        x2, y2 = skycoord_to_pixel(skyCoord1, wcs2, origin=0, mode='wcs')
+        x2, y2 = float(x2), float(y2)
+        
+        # Compute the image difference
+        dx = x2 - x1
+        dy = y2 - y1
+        
+        # Compute the padding amounts (odd vs. even in python 3.x)
+        if (np.int(np.round(dx)) % 2) == 1:
+            padX = np.int(np.round(np.abs(dx))/2 + 1)
+        else:
+            padX = np.int(np.round(np.abs(dx))/2)
+        
+        if (np.int(np.round(dy)) % 2) == 1:
+            padY = np.int(np.round(np.abs(dy))/2 + 1)
+        else:
+            padY = np.int(np.round(np.abs(dy))/2)
+        
+        # Construct the before-after padding combinations
+        if dx > 0:
+            selfDX = (np.int(np.round(np.abs(dx)-padX)), padX)
+        else:
+            selfDX = (padX, np.int(np.round(np.abs(dx)-padX)))
+        
+        if dy > 0:
+            selfDY = (np.int(np.round(np.abs(dy)-padY)), padY)
+        else:
+            selfDY = (padY, np.int(np.round(np.abs(dy)-padY)))
+        
+        imgDX = selfDX[::-1]
+        imgDY = selfDY[::-1]
+        
+        # Compute the shifting amount
+        selfShiftX = +np.int(np.round(0.5*dx))
+        imgShiftX  = -np.int(np.round(dx - selfShiftX))
+        selfShiftY = +np.int(np.round(0.5*dy))
+        imgShiftY  = -np.int(np.round(dy - selfShiftY))
+        
+        # Define the padding widths
+        # (recall axis ordering is 0=z, 1=y, 2=x, etc...)
+        selfPadWidth = np.array((selfDY, selfDX), dtype=np.int)
+        imgPadWidth  = np.array((imgDY,  imgDX), dtype=np.int)
+        
+        # Compute the padding to be added and pad the images
+        newSelf     = self.copy()
+        newImg      = img.copy()
+        newSelf.arr = np.pad(self.arr, selfPadWidth, mode='constant')
+        newImg.arr  = np.pad(img.arr,  imgPadWidth,  mode='constant')
+
+        # Shift the images
+        newSelf.shift(selfShiftX, selfShiftY)
+        newImg.shift(imgShiftX, imgShiftY)
+        
+        # Update the header astrometry
+        newSelf.header['CRPIX1'] = newSelf.header['CRPIX1'] + selfShiftX
+        newSelf.header['CRPIX2'] = newSelf.header['CRPIX2'] + selfShiftY
+        newImg.header['CRPIX1']  = newImg.header['CRPIX1'] + imgShiftX
+        newImg.header['CRPIX2']  = newImg.header['CRPIX2'] + imgShiftY
+
+        # Retun the aligned Images (not the same size as the input images)
+        return [newSelf, newImg]
     
     def stacked_average(imgList, clipSigma = 3.0):
         """Compute the median filtered mean of a stack of images.
@@ -167,6 +321,9 @@ class Image(object):
             return imgList[0].arr
 
     def astrometry(self, override = False):
+        """A method to invoke astrometry.net
+        and solve the astrometry of the image.
+        """
         # Test if the astrometry has already been solved
         try:
             # Try to grab the 'WCSAXES' card from the header
@@ -229,7 +386,11 @@ class Image(object):
             os.system(command)
             
             # Construct the path to the newly created WCS file
-            wcsPath = os.path.dirname(self.filename) + os.path.sep + 'tmp.wcs'
+            filePathList = self.filename.split(os.path.sep)
+            if len(filePathList) > 1:
+                wcsPath = os.path.dirname(self.filename) + os.path.sep + 'tmp.wcs'
+            else:
+                wcsPath = 'tmp.wcs'
             
             # Read in the tmp.wcs file and create a WCS object
             if os.path.isfile(wcsPath):
@@ -247,7 +408,7 @@ class Image(object):
                 # Delete the WCS file, so it doesn't get used for
                 # a different file.
                 os.system('rm ' + wcsPath)
-                    
+                
                 # If everything has worked, then return a True success value
                 return True
             else:
