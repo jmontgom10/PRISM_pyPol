@@ -31,8 +31,9 @@ sortInds = np.argsort(np.array(fileNums, dtype = np.int))
 fileList = [fileList[ind] for ind in sortInds]
 
 # Create an empty file for storing the names of failed astrometry files.
-if not os.path.isfile('failedAstro.dat'):
-    os.system('> failedAstro.dat')
+failedAstroFile = reducedDir + delim + 'astrometryCheck' + delim + 'failedAstro.dat'
+if not os.path.isfile(failedAstroFile):
+    os.system('> ' + failedAstroFile)
 
 # Loop through each file and perform its astrometry method
 for file in fileList:
@@ -45,7 +46,7 @@ for file in fileList:
         # If the astrometry was solved, then proceed to write the astro
         tmpImg.write()
     else:
-        os.system('echo "' + os.path.basename(file) + '" >> failedAstro.dat')
+        os.system('echo "' + os.path.basename(file) + '" >> ' + failedAstroFile)
 
 # Clean up residual Astrometry.net file
 if os.path.isfile('none'):
