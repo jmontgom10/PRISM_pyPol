@@ -1,4 +1,4 @@
-Target Dither
+Group Dither
 M104_R1 "ABBA UQ"
 M104_R2 "ABBA UQ"
 M104_R4 "ABBA UQ"

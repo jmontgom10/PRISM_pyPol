@@ -825,3 +825,74 @@ class Image(object):
         else:
             print('Astrometry for {0:s} already solved.'.
               format(os.path.basename(self.filename)))
+
+    def show(self, axes = None,
+             cmap=None, norm=None, aspect=None, interpolation=None, alpha=None,
+             vmin=None, vmax=None, origin='lower', extent=None, shape=None,
+             filternorm=1, filterrad=4.0, imlim=None, resample=None,
+             hold=None, interactive=True, scale='linear', noShow=False):
+        '''Displays the image to the user for interaction (including clicking?)
+        This method includes all the same keyword arguments as the "imshow()"
+        method from matplotlip.pyplot. This allows the user to control how the
+        image is displayed.
+        
+        Additional keyword arguments include
+        scale -- ['linear' | 'log']
+                 allows the user to specify if if the image stretch should be
+                 linear or log space
+        '''
+#        # Begin by checking that the supplied keywords will work
+#        acceptedScales = ('linear', 'log', 'sinh')
+#        if not (scale in acceptedScales):
+#            print('The provided "scale" keyword is not recognized')
+#            pdb.set_trace()
+        
+        # Set the scaling for the image
+        if scale == 'linear':
+            showArr = self.arr            
+        elif scale == 'log':
+            showArr = np.log10(self.arr)
+            vmin    = np.log10(vmin)
+            vmax    = np.log10(vmax)
+        elif scale == 'asinh':
+            showArr = np.arcsinh(self.arr)
+            vmin    = np.arcsinh(vmin)
+            vmax    = np.arcsinh(vmax)
+        else:
+            print('The provided "scale" keyword is not recognized')
+            pdb.set_trace()
+        
+        # Create the figure and axes for displaying the image
+        if axes is None:
+            # Create a new figure and axes
+            fig  = plt.figure(figsize = (8,8))
+            axes = fig.add_subplot(1,1,1)
+        else:
+            fig = axes.figure
+            axes.imshow(showArr,
+                      cmap=cmap, norm=norm, aspect=aspect,
+                      interpolation=interpolation, alpha=alpha, vmin=vmin,
+                      vmax=vmax, origin=origin, extent=extent, shape=shape,
+                      filternorm=filternorm, filterrad=filterrad, imlim=imlim,
+                      resample=resample)#, hold=hold)
+                      # Is the "hold" keyword a new one??? It is listed in the
+                      # documentation for matplotlib.pyplot
+        
+#        plt.xlabel('X position [pix]')
+#        plt.ylabel('Y position [pix]')
+#        plt.title(os.path.basename(self.filename))
+        
+        # TODO detirmine how to handle axis labels and titles
+        
+#        axes.set_xlabel('X position [pix]')
+#        axes.set_ylabel('Y position [pix]')
+#        axes.set_title(os.path.basename(self.filename))
+        
+        # Display the image to the user, if requested
+        if not noShow:
+            plt.ion()
+            fig.show()
+            plt.ioff()
+        
+        # Return the graphics objects to the user
+        return (fig, axes)
