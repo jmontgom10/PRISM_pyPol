@@ -37,64 +37,134 @@ def str_list_contains(inList, searchStr):
 #******************************************************************************
 # Define the event handlers for clicking and keying on the image display
 #******************************************************************************
-#def display_tri_plot():
-#    global fig, ax
 
 def on_click(event):
-    global xList,yList
+    global xList, yList, xx, yy
+    global fig, brushSize, axarr, maskImg, thisAxImg
     
-    x, y  = event.xdata, event.ydata
-    xList.append(x)
-    yList.append(y)
+    x, y = event.xdata, event.ydata
+#    xList.append(x)
+#    yList.append(y)
     
-    # Update mask array
+    # Compute distances from the click and update mask array
+    dist     = np.sqrt((xx - x)**2 + (yy - y)**2)
+    maskInds = np.where(dist < brushSize*5)
+    if event.button == 1:
+        maskImg.arr[maskInds] = 1
+    if (event.button == 2) or (event.button == 3):
+        maskImg.arr[maskInds] = 0
     
-    
-#    print("({0}, {1})".format(np.round(x), np.round(y)))
-    
-    return
-
-def on_key(event):
-    global fileList, fig, imgNum, prevLabel, thisLabel, nextLabel
-    
-    # increment the image number
-    if event.key == 'right':
-        #Advance to the next image
-        imgNum = imgNum + 1
-    
-    if event.key == 'left':
-        #Move back to the previous image
-        imgNum = imgNum - 1
-    
-    print('plotting image number {0}'.format(imgNum))
-    
-    # Save the generate mask
-    
-    # Read in thenew files
-    prevImg = Image(fileList[imgNum - 1])
-    thisImg = Image(fileList[imgNum])
-    nextImg = Image(fileList[imgNum + 1])
-
-    # Display the new images
-    axList = fig.get_axes()
-    tmpFig, tmpAx = prevImg.show(axes = axList[0], cmap='cubehelix',
-                                 vmin = 0.01, vmax = 300, noShow = True)
-    tmpFig, tmpAx = thisImg.show(axes = axList[1], cmap='cubehelix',
-                                 vmin = 0.01, vmax = 300, noShow = True)
-    tmpFig, tmpAx = nextImg.show(axes = axList[2], cmap='cubehelix',
-                                 vmin = 0.01, vmax = 300, noShow = True)
-
-    # Update the annotation
-    axList[1].set_title(os.path.basename(thisImg.filename))
-    prevLabel.set_text(prevImg.header['POLPOS'])
-    thisLabel.set_text(thisImg.header['POLPOS'])
-    nextLabel.set_text(nextImg.header['POLPOS'])
+    # Update contour plot (clear old lines redo contouring)
+    axarr[1].collections = []
+    axarr[1].contour(xx, yy, maskImg.arr, levels=[0.5], colors='white', alpha = 0.2)
     
     # Update the display
     fig.canvas.draw()
-#    display_tri_plot()
-    
 
+def on_key(event):
+    global fileList, fig, imgNum, brushSize
+    global maskDir, maskImg
+    global prevImg,   thisImg,   nextImg
+    global prevAxImg, thisAxImg, nextAxImg
+    global prevMin,   thisMin,   nextMin
+    global prevMax,   thisMax,   nextMax
+    global prevLabel, thisLabel, nextLabel
+    
+    # Handle brush sizing
+    if event.key == '1':
+        brushSize = 1
+    elif event.key == '2':
+        brushSize = 2
+    elif event.key == '3':
+        brushSize = 3
+    elif event.key == '4':
+        brushSize = 4
+    elif event.key == '5':
+        brushSize = 5
+    elif event.key == '6':
+        brushSize = 6
+    
+    # Increment the image number
+    if event.key == 'right' or event.key == 'left':
+        if event.key == 'right':
+            #Advance to the next image
+            imgNum += 1
+            
+            # Read in the new files
+            prevImg = thisImg
+            thisImg = nextImg
+            nextImg = Image(fileList[imgNum + 1])
+            
+            # Compute new image display minima
+            prevMin = thisMin
+            thisMin = nextMin
+            nextMin = np.median(nextImg.arr) - 0.25*np.std(nextImg.arr)
+            
+            # Compute new image display maxima
+            prevMax = thisMax
+            thisMax = nextMax
+            nextMax = np.median(nextImg.arr) + 2*np.std(nextImg.arr)
+        
+        if event.key == 'left':
+            #Move back to the previous image
+            imgNum -= 1
+            
+            # Read in the new files
+            nextImg = thisImg
+            thisImg = prevImg
+            prevImg = Image(fileList[imgNum - 1])
+    
+            # Compute new image display minima
+            nextMin = thisMin
+            thisMin = prevMin
+            prevMin = np.median(prevImg.arr) - 0.25*np.std(prevImg.arr)
+            
+            # Compute new image display maxima
+            nextMax = thisMax
+            thisMax = prevMax
+            prevMax = np.median(prevImg.arr) + 2*np.std(prevImg.arr)
+        
+        # Reassign image display limits
+        prevAxImg.set_clim(vmin = prevMin, vmax = prevMax)
+        thisAxImg.set_clim(vmin = thisMin, vmax = thisMax)
+        nextAxImg.set_clim(vmin = nextMin, vmax = nextMax)
+        
+        # Display the new images
+        prevAxImg.set_data(prevImg.arr)
+        thisAxImg.set_data(thisImg.arr)
+        nextAxImg.set_data(nextImg.arr)
+        
+        # Update the annotation
+        axList = fig.get_axes()
+        axList[1].set_title(os.path.basename(thisImg.filename))
+        prevLabel.set_text(prevImg.header['POLPOS'])
+        thisLabel.set_text(thisImg.header['POLPOS'])
+        nextLabel.set_text(nextImg.header['POLPOS'])
+        
+        # Update the display
+        fig.canvas.draw()
+    
+    # Save the generated mask
+    if event.key == 'enter':
+        # Make sure the header has the right values
+        maskImg.header = thisImg.header
+        
+        # Generate the correct filename and write to disk
+        filename = maskDir + os.path.sep + os.path.basename(thisImg.filename)
+        maskImg.write(filename)
+    
+    # Clear out the mask values
+    if event.key == 'backspace':
+        # Clear out the mask array
+        maskImg.arr = maskImg.arr * np.byte(0)
+        
+        # Update contour plot (clear old lines redo contouring)
+        axarr[1].collections = []
+        axarr[1].contour(xx, yy, maskImg.arr, levels=[0.5], colors='white', alpha = 0.2)
+        
+        # Update the display
+        fig.canvas.draw()
+    
 #******************************************************************************
 
 #******************************************************************************
@@ -102,10 +172,18 @@ def on_key(event):
 #******************************************************************************
 
 # Declare global variables
-global xList, yList, fileList, fig, imgNum, prevLabel, thisLabel, nextLabel
-xList  = []
-yList  = []
-imgNum = 0      # This number will be the FIRST image to be displayed center...
+#global xList, yList
+global xx, yy
+global fileList, fig, imgNum, maskDir, maskImg
+global prevImg,   thisImg,   nextImg
+global prevAxImg, thisAxImg, nextAxImg
+global prevMin,   thisMin,   nextMin
+global prevMax,   thisMax,   nextMax
+global prevLabel, thisLabel, nextLabel
+xList     = []
+yList     = []
+imgNum    = 0      # This number will be the FIRST image to be displayed center...
+brushSize = 3      # (5xbrushSize pix) is the size of the region masked
 
 #******************************************************************************
 # First the user must identify the names of the targets to be batched
@@ -133,9 +211,9 @@ sortInds = np.argsort(np.array(fileNums, dtype = np.int))
 fileList = [fileList[ind] for ind in sortInds]
 
 # Setup new directory for polarimetry data
-polarimetryDir = reducedDir + delim + 'Polarimetry'
-if (not os.path.isdir(polarimetryDir)):
-    os.mkdir(polarimetryDir, 0o755)
+maskDir = reducedDir + delim + 'Masks'
+if (not os.path.isdir(maskDir)):
+    os.mkdir(maskDir, 0o755)
 
 # Read the fileIndex back in as an astropy Table
 print('\nReading file index from disk')
@@ -193,7 +271,7 @@ fileIndex = fileIndex[np.where(keepFiles)]
 # 2. Waveband
 # 3. Dither (pattern)
 # 4. Polaroid Angle
-fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither', 'Polaroid Angle'])
+fileIndexByTarget = fileIndex.group_by(['Dither', 'Polaroid Angle', 'Waveband', 'Target'])
 
 # Identify the "ON" and "OFF" images for each group,
 # and generate a final list of images that need masking
@@ -212,55 +290,64 @@ for group in fileIndexByTarget.groups:
         onTargetFiles = (group['Filename'])[np.where(imgOnTarget)]
         fileList.extend(onTargetFiles)
 
+#******************************************************************************
 # Sort the final file list
-fileList = np.sort(fileList)
+# NOT SORTING MAKES THE MASKING TASK A BIT EASIER
+#fileList = np.sort(fileList)
+#******************************************************************************
 
 #*************************************
 # Now prepare to plot the first images
 #*************************************
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 # Read in an image for masking
-#fileToMask = fileList'/home/jordan/ThesisData/PRISM_Data/Reduced_data/20150117.145.fits'
 prevImg = Image(fileList[imgNum - 1])
 thisImg = Image(fileList[imgNum])
 nextImg = Image(fileList[imgNum + 1])
 
 # Build a mask template (0 = not masked, 1 = masked)
-maskImg     = thisImg.copy()
-maskImg.arr = maskImg.arr * 0
+maskImg       = thisImg.copy()
+#maskImg.arr   = maskImg.arr * 0
+maskImg.arr   = maskImg.arr.astype(np.int16) * np.int16(0)
+maskImg.dtype = np.byte
+maskImg.header['BITPIX'] = 16
+
+# Generate 2D X and Y position maps
+maskShape = maskImg.arr.shape
+grids     = np.mgrid[0:maskShape[0], 0:maskShape[1]]
+xx        = grids[1]
+yy        = grids[0]
 
 # Build the image displays
 # Start by preparing a 1x3 plotting area
 fig, axarr = plt.subplots(1, 3, sharey=True)
 
-# Loop through each axis and populate it.
-tmpFig, tmpAx = prevImg.show(axes = axarr[0], cmap='cubehelix',
-                                     vmin = 0.01, vmax = 300, noShow = True)
-tmpFig, tmpAx = thisImg.show(axes = axarr[1], cmap='cubehelix',
-                                     vmin = 0.01, vmax = 300, noShow = True)
-tmpFig, tmpAx = nextImg.show(axes = axarr[2], cmap='cubehelix',
-                                     vmin = 0.01, vmax = 300, noShow = True)
+# Compute image count scaling
+prevMin = np.median(prevImg.arr) - 0.25*np.std(prevImg.arr)
+prevMax = np.median(prevImg.arr) + 2*np.std(prevImg.arr)
+thisMin = np.median(thisImg.arr) - 0.25*np.std(thisImg.arr)
+thisMax = np.median(thisImg.arr) + 2*np.std(thisImg.arr)
+nextMin = np.median(nextImg.arr) - 0.25*np.std(nextImg.arr)
+nextMax = np.median(nextImg.arr) + 2*np.std(nextImg.arr)
 
-plt.subplots_adjust(left = 0.04, bottom = 0.04, right = 0.98, top = 0.96,
-                    wspace = 0.02, hspace = 0.02)
+# Populate each axis with its image
+tmpFig, tmpAx, prevAxImg = prevImg.show(axes = axarr[0], cmap='cubehelix',
+                                        vmin = prevMin, vmax = prevMax, noShow = True)
+tmpFig, tmpAx, thisAxImg = thisImg.show(axes = axarr[1], cmap='cubehelix',
+                                        vmin = thisMin, vmax = thisMax, noShow = True)
+tmpFig, tmpAx, nextAxImg = nextImg.show(axes = axarr[2], cmap='cubehelix',
+                                        vmin = nextMin, vmax = nextMax, noShow = True)
 
-# Reset figure aspect ratio
+# Add a contour of the mask array
+maskContour = axarr[1].contour(xx, yy, maskImg.arr,
+                               levels=[0.5], origin='lower', colors='white', alpha = 0.2)
+
+# Rescale the figure and setup the spacing between images
 #fig.set_figheight(5.575, forward=True)
 #fig.set_figwidth(17.0, forward=True)
 fig.set_size_inches(17, 5.675, forward=True)
+plt.subplots_adjust(left = 0.04, bottom = 0.04, right = 0.98, top = 0.96,
+                    wspace = 0.02, hspace = 0.02)
 
 # Add some figure annotation
 thisTitle = axarr[1].set_title(os.path.basename(thisImg.filename))
@@ -270,7 +357,11 @@ thisLabel = axarr[1].text(20, 950, thisImg.header['POLPOS'],
                           color = 'white', size = 'medium')
 nextLabel = axarr[2].text(20, 950, nextImg.header['POLPOS'],
                           color = 'white', size = 'medium')
-
+thisShape = thisImg.arr.shape
+redLines  = axarr[1].plot([thisShape[0]/2, thisShape[0]/2], [0, thisShape[1]],
+                          '-r',
+                          [0, thisShape[0]], [thisShape[1]/2, thisShape[1]/2],
+                          '-r', alpha = 0.4)
 #********************************************
 #log this for future use!
 #********************************************
@@ -279,17 +370,14 @@ nextLabel = axarr[2].text(20, 950, nextImg.header['POLPOS'],
 #                    mouse_add=1, mouse_pop=3, mouse_stop=2)
 #********************************************
 
-
-
 # Connect the event manager...
 cid1 = fig.canvas.mpl_connect('button_press_event',on_click)
 cid2 = fig.canvas.mpl_connect('key_press_event', on_key)
 
 # NOW show the image (without continuing execution)
-plt.ion()
+#plt.ion()
 plt.show()
-plt.ioff()
-pdb.set_trace()
+#plt.ioff()
 
 # Disconnect the event manager and close the figure
 fig.canvas.mpl_disconnect(cid1)

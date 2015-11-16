@@ -228,6 +228,7 @@ class Image(object):
         # Test if a filename was provided and default to current filename
         if len(filename) == 0:
             filename = self.filename
+        
         fits.writeto(filename, self.arr, header = self.header, clobber = True)
     
     def copy(self):
@@ -841,11 +842,6 @@ class Image(object):
                  allows the user to specify if if the image stretch should be
                  linear or log space
         '''
-#        # Begin by checking that the supplied keywords will work
-#        acceptedScales = ('linear', 'log', 'sinh')
-#        if not (scale in acceptedScales):
-#            print('The provided "scale" keyword is not recognized')
-#            pdb.set_trace()
         
         # Set the scaling for the image
         if scale == 'linear':
@@ -867,20 +863,25 @@ class Image(object):
             # Create a new figure and axes
             fig  = plt.figure(figsize = (8,8))
             axes = fig.add_subplot(1,1,1)
+            axIm = axes.imshow(showArr,
+                               cmap=cmap, norm=norm, aspect=aspect,
+                               interpolation=interpolation, alpha=alpha,
+                               vmin=vmin, vmax=vmax, origin=origin,
+                               extent=extent, shape=shape,
+                               filternorm=filternorm, filterrad=filterrad,
+                               imlim=imlim, resample=resample)#, hold=hold)
+
         else:
-            fig = axes.figure
-            axes.imshow(showArr,
-                      cmap=cmap, norm=norm, aspect=aspect,
-                      interpolation=interpolation, alpha=alpha, vmin=vmin,
-                      vmax=vmax, origin=origin, extent=extent, shape=shape,
-                      filternorm=filternorm, filterrad=filterrad, imlim=imlim,
-                      resample=resample)#, hold=hold)
+            fig  = axes.figure
+            axIm = axes.imshow(showArr,
+                               cmap=cmap, norm=norm, aspect=aspect,
+                               interpolation=interpolation, alpha=alpha,
+                               vmin=vmin, vmax=vmax, origin=origin,
+                               extent=extent, shape=shape,
+                               filternorm=filternorm, filterrad=filterrad,
+                               imlim=imlim, resample=resample)#, hold=hold)
                       # Is the "hold" keyword a new one??? It is listed in the
                       # documentation for matplotlib.pyplot
-        
-#        plt.xlabel('X position [pix]')
-#        plt.ylabel('Y position [pix]')
-#        plt.title(os.path.basename(self.filename))
         
         # TODO detirmine how to handle axis labels and titles
         
@@ -895,4 +896,4 @@ class Image(object):
             plt.ioff()
         
         # Return the graphics objects to the user
-        return (fig, axes)
+        return (fig, axes, axIm)
