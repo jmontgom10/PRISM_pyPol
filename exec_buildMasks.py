@@ -137,9 +137,19 @@ def on_key(event):
         # Update the annotation
         axList = fig.get_axes()
         axList[1].set_title(os.path.basename(thisImg.filename))
-        prevLabel.set_text(prevImg.header['POLPOS'])
-        thisLabel.set_text(thisImg.header['POLPOS'])
-        nextLabel.set_text(nextImg.header['POLPOS'])
+        
+        prevStr   = (str(prevImg.header['OBJECT']) + '\n' +
+                     str(prevImg.header['FILTNME3'] + '\n' +
+                     str(prevImg.header['POLPOS'])))
+        thisStr   = (str(thisImg.header['OBJECT']) + '\n' +
+                     str(thisImg.header['FILTNME3'] + '\n' +
+                     str(thisImg.header['POLPOS'])))
+        nextStr   = (str(nextImg.header['OBJECT']) + '\n' +
+                     str(nextImg.header['FILTNME3'] + '\n' +
+                     str(nextImg.header['POLPOS'])))
+        prevLabel.set_text(prevStr)
+        thisLabel.set_text(thisStr)
+        nextLabel.set_text(nextStr)
         
         # Update the display
         fig.canvas.draw()
@@ -271,7 +281,7 @@ fileIndex = fileIndex[np.where(keepFiles)]
 # 2. Waveband
 # 3. Dither (pattern)
 # 4. Polaroid Angle
-fileIndexByTarget = fileIndex.group_by(['Dither', 'Polaroid Angle', 'Waveband', 'Target'])
+fileIndexByTarget = fileIndex.group_by(['Dither', 'Target', 'Waveband', 'Polaroid Angle'])
 
 # Identify the "ON" and "OFF" images for each group,
 # and generate a final list of images that need masking
@@ -351,11 +361,20 @@ plt.subplots_adjust(left = 0.04, bottom = 0.04, right = 0.98, top = 0.96,
 
 # Add some figure annotation
 thisTitle = axarr[1].set_title(os.path.basename(thisImg.filename))
-prevLabel = axarr[0].text(20, 950, prevImg.header['POLPOS'],
+prevStr   = (str(prevImg.header['OBJECT']) + '\n' +
+             str(prevImg.header['FILTNME3'] + '\n' +
+             str(prevImg.header['POLPOS'])))
+thisStr   = (str(thisImg.header['OBJECT']) + '\n' +
+             str(thisImg.header['FILTNME3'] + '\n' +
+             str(thisImg.header['POLPOS'])))
+nextStr   = (str(nextImg.header['OBJECT']) + '\n' +
+             str(nextImg.header['FILTNME3'] + '\n' +
+             str(nextImg.header['POLPOS'])))
+prevLabel = axarr[0].text(20, 875, prevStr,
                           color = 'white', size = 'medium')
-thisLabel = axarr[1].text(20, 950, thisImg.header['POLPOS'],
+thisLabel = axarr[1].text(20, 875, thisStr,
                           color = 'white', size = 'medium')
-nextLabel = axarr[2].text(20, 950, nextImg.header['POLPOS'],
+nextLabel = axarr[2].text(20, 875, nextStr,
                           color = 'white', size = 'medium')
 thisShape = thisImg.arr.shape
 redLines  = axarr[1].plot([thisShape[0]/2, thisShape[0]/2], [0, thisShape[1]],
