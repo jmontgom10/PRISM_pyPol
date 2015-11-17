@@ -173,10 +173,15 @@ for group in fileIndexByTarget.groups:
     for file in group['Filename']:
         tmpImg = Image(file)
         polPos = str(tmpImg.header['POLPOS'])
+        
+        # Check that the polPos value is correct
         if polPos != thisPolAng:
             print('Image polaroid angle does not match expected value')
             pdb.set_trace()
-        imgList.append(tmpImg)
+        
+        # Only read in 2x2 binned images
+        if tmpImg.binning() == 2:
+            imgList.append(tmpImg)
     
     del tmpImg
     #
