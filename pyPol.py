@@ -1,15 +1,19 @@
 import pdb
+import os
 import psutil
 import time
 import numpy as np
+from scipy import signal
 from scipy import ndimage
 import scipy.stats
 import matplotlib.pyplot as plt
-import os
+from astropy.modeling import models, fitting
+from astropy.stats import sigma_clipped_stats
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 from astropy.wcs.utils import pixel_to_skycoord, skycoord_to_pixel
+from photutils import daofind
 
 class Image(object):
     """An object which stores an image array and header and provides a
@@ -213,23 +217,18 @@ class Image(object):
     
     def __truediv__(self, other):
         # Implements true division (converting to float).
+        # TODO catch division by zero (how to handle it?)
         return self.__div__(other)
     
     def __rtruediv__(self, other):
         # Implements reverse true division (converting to float).
+        #TODO catch division by zero (how to handle it?)
         if other == 0:
             output = self.copy()
             output.arr = np.zeros(self.arr.shape)
             return output
         else:
             return self.__rdiv__(other)
-    
-    def write(self, filename = ''):
-        # Test if a filename was provided and default to current filename
-        if len(filename) == 0:
-            filename = self.filename
-        
-        fits.writeto(filename, self.arr, header = self.header, clobber = True)
     
     def copy(self):
         # Define a fresh image to copy all the properties
@@ -250,8 +249,49 @@ class Image(object):
 
         return output
     
-    # TODO define a subtraction method for image array
-    # test for if it's another image or a similarly sized array
+    def rebin(self, binning, copy=False):
+        """Rebins the using the INTEGER number of bins specified by 'binning'.
+        If the image shape is a non-integer multiple of the image array, then
+        zero-padding is added to make the image shape a multiple of the
+        binning. If 'copy' is True, then the method will return a new copy of
+        the image with its array rebinned. Otherwise, the image will be
+        rebinned in place.
+        """
+        # Make a copy of the array before applying padding or rebinning
+        rebinArr = self.arr.copy()
+        
+        # Check if Y-axis needs padding
+        remainderY = rebinArr.shape[0] % binning
+        remainderX = rebinArr.shape[1] % binning
+        if (remainderY != 0) or (remainderX != 0):
+            rebinArr = np.pad(rebinArr, ((0,remainderY),(0, remainderX)),
+                              mode='constant')
+        
+        # Get the new shape for the array and compute the rebinning shape
+        newShape = self.arr.shape[0]//binning, self.arr.shape[1]//binning
+        sh = (newShape[0],rebinArr.shape[0]//newShape[0],
+              newShape[1],rebinArr.shape[1]//newShape[1])
+        
+        # Reassign the image array to be the rebinned array
+        rebinArr = rebinArr.reshape(sh).mean(-1).mean(1)
+        
+        if copy:
+            # If a copy was requesty, then return a copy of the original image
+            # with a newly rebinned array
+            outImg     = self.copy()
+            outImg.arr = rebinArr
+            return outImg
+        else:
+            # Otherwise place the rebinned array directly into the Image object
+            self.arr = rebinArr
+    
+    def write(self, filename = ''):
+        # Test if a filename was provided and default to current filename
+        if len(filename) == 0:
+            filename = self.filename
+        
+        # Write the file to disk
+        fits.writeto(filename, self.arr, header = self.header, clobber = True)
     
     def shift(self, dx, dy):
         """A method to shift the image dx pixels to the right and dy pixels up.
@@ -266,7 +306,7 @@ class Image(object):
         ny, nx = self.arr.shape
         
         # Check if the X shift is an integer value
-        if round(float(dx), 6).is_integer():
+        if round(float(dx), 12).is_integer():
             # Force the shift to an integer value
             dx   = np.int(round(dx))
             padX = np.abs(dx)
@@ -287,9 +327,17 @@ class Image(object):
             if dx > 0:
                 padLf  = (shiftX - 1, 1)
                 padRt  = (shiftX, 0)
+                
+                # Compute the contributing fractions from the left and right images
+                fracLf = (shiftX - np.abs(dx))
+                fracRt = 1 - fracLf
             elif dx < 0:
                 padLf  = (0, shiftX)
                 padRt  = (1, shiftX - 1)
+                
+                # Compute the contributing fractions from the left and right images
+                fracLf = 1 - (shiftX - np.abs(dx))
+                fracRt = 1 - fracLf
             else:
                 padLf  = (0,0)
                 padRt  = (0,0)
@@ -299,10 +347,6 @@ class Image(object):
                            ((0,0), padLf), mode='constant')
             imgRt = np.pad(self.arr,
                            ((0,0), padRt), mode='constant')
-
-            # Compute the contributing fractions from the left and right images
-            fracLf = shiftX - np.abs(dx)
-            fracRt = 1 - fracLf
             
             # Combine the weighted images                           
             shiftImg = fracLf*imgLf + fracRt*imgRt
@@ -339,9 +383,18 @@ class Image(object):
             if dy > 0:
                 padBot  = (shiftY - 1, 1)
                 padTop  = (shiftY, 0)
+
+                # Compute the contributing fractions from the top and bottom images
+                fracBot = (shiftY - np.abs(dy))
+                fracTop = 1 - fracBot
+
             elif dy < 0:
                 padBot  = (0, shiftY)
                 padTop  = (1, shiftY - 1)
+                
+                # Compute the contributing fractions from the top and bottom images
+                fracBot = 1 - (shiftY - np.abs(dy))
+                fracTop = 1 - fracBot
             else:
                 padBot  = (0,0)
                 padTop  = (0,0)
@@ -351,10 +404,6 @@ class Image(object):
                             (padBot, (0,0)), mode='constant')
             imgTop = np.pad(self.arr,
                             (padTop, (0,0)), mode='constant')
-
-            # Compute the contributing fractions from the left and right images
-            fracBot = shiftY - np.abs(dy)
-            fracTop = 1 - fracBot
             
             # Combine the weighted images
             shiftImg = fracBot*imgBot + fracTop*imgTop
@@ -374,149 +423,359 @@ class Image(object):
         self.header['CRPIX2'] = self.header['CRPIX2'] + dy
         
     
-    def align(self, img, fractionalShift=False):
+    def align(self, img, fractionalShift=False, mode='wcs',
+              offsets=False):
         """A method to align the self image with an other image
         using the astrometry from each header to shift an INTEGER
         number of pixels.
         
         parameters:
-        img -- the image with which self will be aligned
+        img             -- the image with which self will be aligned
+        fractionalShift -- if True, then images are shifted
+                           to be aligned with sub-pixel precision
+        mode            -- ['wcs' | 'cross-correlate']
+                           defines the method used to align the two images
         """
         #**********************************************************************
         # It is unclear if this routine can handle images of different size.
         # It definitely assumes an identical plate scale...
         # Perhaps I needto be adjusting for each of these???
         #**********************************************************************
-
-        # Align self image with img image
-
-        # Make sure the images are the same shape
-        ny1, nx1  = self.arr.shape
-        ny2, nx2  = img.arr.shape
         
-        # Pad the arrays where necessary
+        # Align self image with img image
+        
+        # Pad the arrays to make sure they are the same size
+        ny1, nx1 = self.arr.shape
+        ny2, nx2 = img.arr.shape
+        newSelf  = self.copy()
+        newImg   = img.copy()
         if (nx1 > nx2):
             padX    = nx1 - nx2
-            img.arr = np.pad(img.arr, ((0,0), (0,padX)), mode='constant')
-                        # Update the header information
-            img.header['NAXIS1'] = img.header['NAXIS1'] + padX
+            newImg.arr = np.pad(newImg.arr, ((0,0), (0,padX)), mode='constant')
+            # Update the header information
+            newImg.header['NAXIS1'] = img.header['NAXIS1'] + padX
             del padX
         if (nx1 < nx2):
             padX     = nx2 - nx1
-            self.arr = np.pad(self.arr, ((0,0), (0,padX)), mode='constant')
-            self.header['NAXIS2'] = self.header['NAXIS2'] + padX
+            newSelf.arr = np.pad(newSelf.arr, ((0,0), (0,padX)), mode='constant')
+            newSelf.header['NAXIS1'] = self.header['NAXIS1'] + padX
             del padX
         
         if (ny1 > ny2):
             padY    = ny1 - ny2
-            img.arr = np.pad(img.arr, ((0,padY),(0,0)), mode='constant')
-            img.header['NAXIS2'] = img.header['NAXIS2'] + padY
+            newImg.arr = np.pad(newImg.arr, ((0,padY),(0,0)), mode='constant')
+            newImg.header['NAXIS2'] = img.header['NAXIS2'] + padY
             del padY
         if (ny1 < ny2):
             padY     = ny2 - ny1
-            self.arr = np.pad(self.arr, ((0,padY),(0,0)), mode='constant')
-            self.header['NAXIS2'] = self.header['NAXIS2'] + padY
+            newSelf.arr = np.pad(newSelf.arr, ((0,padY),(0,0)), mode='constant')
+            newSelf.header['NAXIS2'] = self.header['NAXIS2'] + padY
             del padY
-                
-        # Grab self image WCS and pixel center
-        wcs1   = WCS(self.header)
-        wcs2   = WCS(img.header)
-        x1     = np.mean([wcs1.wcs.crpix[0], wcs2.wcs.crpix[0]])
-        y1     = np.mean([wcs1.wcs.crpix[1], wcs2.wcs.crpix[1]])
         
-        # Convert pixels to sky coordinates
-        RA1, Dec1 = wcs1.all_pix2world(x1, y1, 0)
-
-        # Grab the WCS of the alignment image and convert back to pixels
-        x2, y2 = wcs2.all_world2pix(RA1, Dec1, 0)
-        x2, y2 = float(x2), float(y2)
-        
-        # Compute the image difference
-        dx = x2 - x1
-        dy = y2 - y1
-        
-        # Compute the padding amounts (odd vs. even in python 3.x)
-        if (np.int(np.round(dx)) % 2) == 1:
-            padX = np.int(np.round(np.abs(dx))/2 + 1)
-        else:
-            padX = np.int(np.round(np.abs(dx))/2)
-        
-        if (np.int(np.round(dy)) % 2) == 1:
-            padY = np.int(np.round(np.abs(dy))/2 + 1)
-        else:
-            padY = np.int(np.round(np.abs(dy))/2)
-        
-        # Construct the before-after padding combinations
-        if dx > 0:
-            selfDX = (np.int(np.round(np.abs(dx)-padX)), padX)
-        else:
-            selfDX = (padX, np.int(np.round(np.abs(dx)-padX)))
-        
-        if dy > 0:
-            selfDY = (np.int(np.round(np.abs(dy)-padY)), padY)
-        else:
-            selfDY = (padY, np.int(np.round(np.abs(dy)-padY)))
-        
-        imgDX = selfDX[::-1]
-        imgDY = selfDY[::-1]
-        
-        # Compute the shifting amount
-        if fractionalShift:
-            selfShiftX = +0.5*dx
-            imgShiftX  = selfShiftX - dx
-            selfShiftY = +0.5*dy
-            imgShiftY  = selfShiftY - dy
-        else:
-            selfShiftX = +np.int(np.round(0.5*dx))
-            imgShiftX  = -np.int(np.round(dx - selfShiftX))
-            selfShiftY = +np.int(np.round(0.5*dy))
-            imgShiftY  = -np.int(np.round(dy - selfShiftY))
-
-        
-        # Define the padding widths
-        # (recall axis ordering is 0=z, 1=y, 2=x, etc...)
-        selfPadWidth = np.array((selfDY, selfDX), dtype=np.int)
-        imgPadWidth  = np.array((imgDY,  imgDX), dtype=np.int)
-        
-        # Compute the padding to be added and pad the images
-        newSelf     = self.copy()
-        newImg      = img.copy()
-        newSelf.arr = np.pad(self.arr, selfPadWidth, mode='constant')
-        newImg.arr  = np.pad(img.arr,  imgPadWidth,  mode='constant')
-        
-        # Account for un-balanced padding with an initial shift left or down
-        initialXshift = selfPadWidth[1,0] - imgPadWidth[1,0]
-        if initialXshift > 0:
-            newSelf.shift(-initialXshift, 0)
-        elif initialXshift < 0:
-            newImg.shift(-initialXshift, 0)
-        
-        initialYshift = selfPadWidth[0,0] - imgPadWidth[0,0]
-        if initialYshift > 0:
-            newSelf.shift(0, -initialYshift)
-        elif initialYshift < 0:
-            newImg.shift(0, -initialYshift)
-
-
-        # Update header info
-        newSelf.header['NAXIS1'] = newSelf.arr.shape[1]
-        newSelf.header['NAXIS2'] = newSelf.arr.shape[0]
-        newImg.header['NAXIS1']  = newImg.arr.shape[1]
-        newImg.header['NAXIS2']  = newImg.arr.shape[0]
-        
-        # Shift the images
-        newSelf.shift(selfShiftX, selfShiftY)
-        newImg.shift(imgShiftX, imgShiftY)
-        
-        # Retun the aligned Images (not the same size as the input images)
-        return [newSelf, newImg]
+        if mode == 'wcs':
+            # Grab self image WCS and pixel center
+            wcs1   = WCS(self.header)
+            wcs2   = WCS(img.header)
+            x1     = np.mean([wcs1.wcs.crpix[0], wcs2.wcs.crpix[0]])
+            y1     = np.mean([wcs1.wcs.crpix[1], wcs2.wcs.crpix[1]])
+            
+            # Convert pixels to sky coordinates
+            RA1, Dec1 = wcs1.all_pix2world(x1, y1, 0)
     
-    def align_stack(imgList, padding=0):
+            # Grab the WCS of the alignment image and convert back to pixels
+            x2, y2 = wcs2.all_world2pix(RA1, Dec1, 0)
+            x2, y2 = float(x2), float(y2)
+            
+            # Compute the image difference
+            dx = x2 - x1
+            dy = y2 - y1
+            
+            # Compute the padding amounts (odd vs. even in python 3.x)
+            if (np.int(np.round(dx)) % 2) == 1:
+                padX = np.int(np.round(np.abs(dx))/2 + 1)
+            else:
+                padX = np.int(np.round(np.abs(dx))/2)
+            
+            if (np.int(np.round(dy)) % 2) == 1:
+                padY = np.int(np.round(np.abs(dy))/2 + 1)
+            else:
+                padY = np.int(np.round(np.abs(dy))/2)
+            
+            # Construct the before-after padding combinations
+            if dx > 0:
+                selfDX = (np.int(np.round(np.abs(dx)-padX)), padX)
+            else:
+                selfDX = (padX, np.int(np.round(np.abs(dx)-padX)))
+            
+            if dy > 0:
+                selfDY = (np.int(np.round(np.abs(dy)-padY)), padY)
+            else:
+                selfDY = (padY, np.int(np.round(np.abs(dy)-padY)))
+            
+            imgDX = selfDX[::-1]
+            imgDY = selfDY[::-1]
+            
+            # Compute the shifting amount
+            if fractionalShift:
+                selfShiftX = +0.5*dx
+                imgShiftX  = selfShiftX - dx
+                selfShiftY = +0.5*dy
+                imgShiftY  = selfShiftY - dy
+            else:
+                selfShiftX = +np.int(np.round(0.5*dx))
+                imgShiftX  = -np.int(np.round(dx - selfShiftX))
+                selfShiftY = +np.int(np.round(0.5*dy))
+                imgShiftY  = -np.int(np.round(dy - selfShiftY))
+    
+            
+            # Define the padding widths
+            # (recall axis ordering is 0=z, 1=y, 2=x, etc...)
+            selfPadWidth = np.array((selfDY, selfDX), dtype=np.int)
+            imgPadWidth  = np.array((imgDY,  imgDX), dtype=np.int)
+            
+            # Compute the padding to be added and pad the images
+            newSelf.arr = np.pad(self.arr, selfPadWidth, mode='constant')
+            newImg.arr  = np.pad(img.arr,  imgPadWidth,  mode='constant')
+            
+            # Account for un-balanced padding with an initial shift left or down
+            initialXshift = selfPadWidth[1,0] - imgPadWidth[1,0]
+            if initialXshift > 0:
+                newSelf.shift(-initialXshift, 0)
+            elif initialXshift < 0:
+                newImg.shift(-initialXshift, 0)
+            
+            initialYshift = selfPadWidth[0,0] - imgPadWidth[0,0]
+            if initialYshift > 0:
+                newSelf.shift(0, -initialYshift)
+            elif initialYshift < 0:
+                newImg.shift(0, -initialYshift)
+            
+            # Update header info
+            newSelf.header['NAXIS1'] = newSelf.arr.shape[1]
+            newSelf.header['NAXIS2'] = newSelf.arr.shape[0]
+            newImg.header['NAXIS1']  = newImg.arr.shape[1]
+            newImg.header['NAXIS2']  = newImg.arr.shape[0]
+            
+            # Shift the images
+            newSelf.shift(selfShiftX, selfShiftY)
+            newImg.shift(imgShiftX, imgShiftY)
+            
+            # Save the total offsets
+            # TODO check that this is correct
+            dx_tot, dy_tot = selfShiftX - imgShiftX, selfShiftY - imgShiftY
+                
+        elif mode == 'cross_correlate':
+            """
+            n. b. This method appears to produce results accurate to better
+            than 0.1 pixel as determined by simply copying an image, shifting
+            it an arbitrary amount, and attempting to recover that shift.
+            """
+            
+            # Do an array flipped convolution, which is a correlation.
+            corr = signal.fftconvolve(newSelf.arr, newImg.arr[::-1, ::-1], mode='same')
+            
+            # Check for the maximum of the cross-correlation function
+            peak1  = np.unravel_index(corr.argmax(), corr.shape)
+            dy, dx = np.array(peak1) - np.array(corr.shape)//2
+            
+            # Apply the initial (integer) shifts to the images
+            img1 = newImg.copy()
+            img1.shift(dx, dy)
+            
+            # Combine images to find the brightest 25 (or 16, or 9 stars in the image)
+            comboImg = newSelf + img1
+            
+            # Get the image statistics
+            mean, median, std = sigma_clipped_stats(comboImg.arr, sigma=3.0, iters=5)
+            
+            # Find the stars in the images
+            sources = daofind(comboImg.arr - median, fwhm=3.0, threshold=5.*std)
+            
+            # Sort the sources lists by brightness
+            sortInds = np.argsort(sources['mag'])
+            sources  = sources[sortInds]
+            
+            # Remove detections within 20 pixels of the image edge
+            # (This guarantees that the star-cutout process will succeed)
+            ny, nx   = comboImg.arr.shape
+            goodX    = np.logical_and(sources['xcentroid'] > 20,
+                                     sources['xcentroid'] < (nx - 20))
+            goodY    = np.logical_and(sources['ycentroid'] > 20,
+                                     sources['ycentroid'] < (ny - 20))
+            goodInds = np.where(np.logical_and(goodX, goodY))
+            sources  = sources[goodInds]
+            
+            # Cull the saturated stars from the list
+            numStars = len(sources)
+            yy, xx   = np.mgrid[0:ny,0:nx]
+            badStars = []
+            for iStar in range(numStars):
+                # Grab pixels less than 10 from the star
+                xStar, yStar = sources[iStar]['xcentroid'], sources[iStar]['ycentroid']
+                starDist  = np.sqrt((xx - xStar)**2 + (yy - yStar)**2)
+                starPatch = comboImg.arr[np.where(starDist < 10)]
+                
+                # Test if there are bad pixels within 10 from the star
+                numBadPix = np.sum(np.logical_or(starPatch > 12e3, starPatch < -100))
+                
+                # Append the test result to the "badStars" list
+                badStars.append(numBadPix > 0)
+            
+            sources = sources[np.where(np.logical_not(badStars))]
+            
+            # Cull the list to the brightest few stars
+            numStars = len(sources)
+            if numStars > 25:
+                numStars = 25
+            elif numStars > 16:
+                numStars = 16
+            elif numStars > 9:
+                numStars = 9
+            else:
+                print('There are not very many stars. Is something wrong?')
+                pdb.set_trace()
+            
+            sources = sources[0:numStars]
+            
+            # Chop out the sections around each star,
+            # and build a "starImage"
+            starCutout  = 20
+            numZoneSide = np.int(np.round(np.sqrt(numStars)))
+            starImgSide = starCutout*numZoneSide
+            starImg1 = np.zeros((starImgSide, starImgSide))
+            starImg2 = np.zeros((starImgSide, starImgSide))
+            # Loop through each star to be cut out
+            iStar = 0
+            for xZone in range(numZoneSide):
+                for yZone in range(numZoneSide):
+                    # Grab the star positions
+                    xStar = np.round(sources['xcentroid'][iStar])
+                    yStar = np.round(sources['ycentroid'][iStar])
+                    
+                    # Establish the cutout bondaries
+                    btCut = yStar - np.floor(0.5*starCutout)
+                    tpCut = btCut + starCutout
+                    lfCut = xStar - np.floor(0.5*starCutout)
+                    rtCut = lfCut + starCutout
+                            
+                    # Establish the pasting boundaries
+                    btPaste = starCutout*yZone
+                    tpPaste = starCutout*(yZone + 1)
+                    lfPaste = starCutout*xZone
+                    rtPaste = starCutout*(xZone + 1)
+            
+                    # Chop out the star and place it in the starImg
+                    #    (sqrt-scale cutouts (~SNR per pixel) to emphasize alignment
+                    #    of ALL stars not just bright stars).
+                    # Apply accurate flooring of values at 0 (rather than simply using np.abs)
+                    starImg1[btPaste:tpPaste, lfPaste:rtPaste] = np.sqrt(np.abs(newSelf.arr[btCut:tpCut, lfCut:rtCut]))
+                    starImg2[btPaste:tpPaste, lfPaste:rtPaste] = np.sqrt(np.abs(img1.arr[btCut:tpCut, lfCut:rtCut]))
+                    
+                    # Increment the star counter
+                    iStar += 1
+            
+            # Do an array flipped convolution, which is a correlation.
+            corr  = signal.fftconvolve(starImg1, starImg2[::-1, ::-1], mode='same')
+            corr  = 100*corr/np.max(corr)
+            
+            # Check for the maximum of the cross-correlation function
+            peak2 = np.unravel_index(corr.argmax(), corr.shape)
+            
+            # Chop out the central peak
+            peakSz = 6
+            btCorr = peak2[0] - peakSz
+            tpCorr = btCorr + 2*peakSz + 1
+            lfCorr = peak2[1] - peakSz
+            rtCorr = lfCorr + 2*peakSz + 1
+            corr1  = corr[btCorr:tpCorr, lfCorr:rtCorr]
+            
+            # Get the gradient of the cross-correlation function
+            tmp     = Image()
+            tmp.arr = corr1
+            Gx, Gy  = tmp.gradient()
+            grad    = np.sqrt(Gx**2 + Gy**2)
+            
+            # Fill in edges to remove artifacts
+            gradMax      = np.max(grad)
+            grad[0:3, :] = gradMax
+            grad[:, 0:3] = gradMax
+            grad[grad.shape[0]-3:grad.shape[0], :] = gradMax
+            grad[:, grad.shape[1]-3:grad.shape[1]] = gradMax
+            
+            # Grab the index of the minimum
+            yMin, xMin = np.unravel_index(grad.argmin(), grad.shape)
+            
+            # Chop out the central zone and grab the minimum of the gradient
+            cenSz = 3
+            bot   = yMin - cenSz//2
+            top   = bot + cenSz
+            lf    = xMin - cenSz//2
+            rt    = lf + cenSz
+            
+            # Grab the region near the minima
+            yy, xx   = np.mgrid[bot:top, lf:rt]
+            Gx_plane = Gx[bot:top, lf:rt]
+            Gy_plane = Gy[bot:top, lf:rt]
+            
+            # Fit planes to the x and y gradients...Gx
+            px_init = models.Polynomial2D(degree=1)
+            py_init = models.Polynomial2D(degree=1)
+            #fit_p   = fitting.LevMarLSQFitter()
+            fit_p   = fitting.LinearLSQFitter()
+            px      = fit_p(px_init, xx, yy, Gx_plane)
+            py      = fit_p(py_init, xx, yy, Gy_plane)
+            
+            # Solve these equations using NUMPY
+            #0 = px.c0_0 + px.c1_0*xx_plane + px.c0_1*yy_plane
+            #0 = py.c0_0 + py.c1_0*xx_plane + py.c0_1*yy_plane
+            #
+            # This can be reduced to Ax = b, where
+            # 
+            A = np.matrix([[px.c1_0.value, px.c0_1.value],
+                           [py.c1_0.value, py.c0_1.value]])
+            b = np.matrix([[-px.c0_0.value],
+                           [-py.c0_0.value]])
+            
+            # Now we can use the build in numpy linear algebra solver
+            x_soln = np.linalg.solve(A, b)
+            
+            # Finally convert back into an absolute image offset
+            dx1 = lfCorr + (x_soln.item(0) - (numZoneSide*starCutout)//2)
+            dy1 = btCorr + (x_soln.item(1) - (numZoneSide*starCutout)//2)
+            dx_tot = dx + dx1
+            dy_tot = dy + dy1
+            
+        else:
+            print('mode rot recognized')
+            pdb.set_trace(0)
+        
+        if offsets:
+            # Return the image offsets
+            return [dx_tot, dy_tot]
+        else:
+            #&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+            # IN THE FUTURE THERE SHOULD BE SOME PADDING ADDED TO PREVENT DATA
+            # LOSS
+            #&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+            # Apply the final shifts
+            newSelf.shift(-0.5*dx_tot, -0.5*dy_tot)
+            newImg.shift(+0.5*dx_tot, +0.5*dy_tot)
+
+            # Retun the aligned Images (not the same size as the input images)
+            return [newSelf, newImg]
+    
+    def align_stack(imgList, padding=0, mode='wcs', subPixel=False):
         """A method to align the a whole stack of images using the astrometry
         from each header to shift an INTEGER number of pixels.
         
         parameters:
-        imgList -- the list of image to be aligned
+        imgList -- the list of image to be aligned.
+        padding -- the value to use for padding the edges of the aligned
+                   images. Common values are 0 and NaN.
+        mode    -- ['wcs' | 'cross_correlate'] the method to be used for
+                   aligning the images in imgList. 'wcs' uses the astrometry
+                   in the header while 'cross_correlation' selects a reference
+                   image and computes image offsets using cross-correlation.
         """
         # Catch the case where imgList has only one image
         if len(imgList) <= 1:
@@ -525,30 +784,53 @@ class Image(object):
         
         # Catch the case where imgList has only two images
         if len(imgList) <= 2:
-            return imgList[0].align(imgList[1])
+            return imgList[0].align(imgList[1], mode=mode)
         
-        # Compute the relative position of each of the images in the stack
-        shapeList = []
-        imgXpos   = []
-        imgYpos   = []
-        wcs1      = WCS(imgList[0].header)
-        x1, y1    = imgList[0].arr.shape[1]//2, imgList[0].arr.shape[0]//2
-        
-        # Append the first image coordinates to the list
-        imgXpos.append(float(x1))
-        imgYpos.append(float(y1))
-        
-        # Convert pixels to sky coordinates
-        skyCoord1 = pixel_to_skycoord(x1, y1, wcs1, origin=0, mode='wcs', cls=None)
-        
-        # Loop through all the remaining images in the list
-        # Grab the WCS of the alignment image and convert back to pixels
-        for img in imgList[1:]:
-            wcs2   = WCS(img.header)
-            x2, y2 = skycoord_to_pixel(skyCoord1, wcs2, origin=0, mode='wcs')
-            imgXpos.append(float(x2))
-            imgYpos.append(float(y2))
-            shapeList.append(img.arr.shape)
+        #**********************************************************************
+        # Get the offsets using whatever mode was selected
+        #**********************************************************************
+        if mode == 'wcs':
+            # Compute the relative position of each of the images in the stack
+            wcs1      = WCS(imgList[0].header)
+            x1, y1    = imgList[0].arr.shape[1]//2, imgList[0].arr.shape[0]//2
+            
+            # Append the first image coordinates to the list
+            shapeList = [imgList[0].arr.shape]
+            imgXpos   = [float(x1)]
+            imgYpos   = [float(y1)]
+            
+            # Convert pixels to sky coordinates
+            skyCoord1 = pixel_to_skycoord(x1, y1, wcs1, origin=0, mode='wcs', cls=None)
+            
+            # Loop through all the remaining images in the list
+            # Grab the WCS of the alignment image and convert back to pixels
+            for img in imgList[1:]:
+                wcs2   = WCS(img.header)
+                x2, y2 = skycoord_to_pixel(skyCoord1, wcs2, origin=0, mode='wcs')
+                shapeList.append(img.arr.shape)
+                imgXpos.append(float(x2))
+                imgYpos.append(float(y2))
+            
+        elif mode == 'cross_correlate':
+            # Use the first image in the list as the "reference image"
+            refImg = imgList[0]
+            
+            # Initalize empty lists for storing offsets and shapes
+            shapeList = [refImg.arr.shape]
+            imgXpos   = [0.0]
+            imgYpos   = [0.0]
+            
+            # Loop through the rest of the images.
+            # Use cross-correlation to get relative offsets,
+            # and accumulate image shapes
+            for img in imgList[1:]:
+                dx, dy = refImg.align(img, mode='cross_correlate', offsets=True)
+                shapeList.append(img.arr.shape)
+                imgXpos.append(-dx)
+                imgYpos.append(-dy)
+        else:
+            print('mode not recognized')
+            pdb.set_trace()
         
         # Make sure all the images are the same size
         shapeList = np.array(shapeList)
@@ -571,8 +853,17 @@ class Image(object):
         x1, y1 = imgXpos[centerImg], imgYpos[centerImg]
         
         # Recompute the offsets from the reference image
-        dx = x1 - np.array(imgXpos)
-        dy = y1 - np.array(imgYpos)
+        # (add an 'epsilon' shift to make sure ALL images get shifted
+        # at least a tiny bit... this guarantees the images all get convolved
+        # by the pixel shape.)
+        epsilon = 1e-4
+        dx = x1 - np.array(imgXpos) + epsilon
+        dy = y1 - np.array(imgYpos) + epsilon
+        
+        # Check for integer shifts
+        for dx1, dy1 in zip(dx, dy):
+            if dx1.is_integer(): pdb.set_trace()
+            if dy1.is_integer(): pdb.set_trace()
         
         # Compute the total image padding necessary to fit the whole stack
         padLf     = np.int(np.round(np.abs(np.min(dx))))
@@ -617,8 +908,12 @@ class Image(object):
             newImg.header['NAXIS2'] = newImg.arr.shape[0]
 
             # Shift the images
-            shiftX = np.int(np.round(dx[i]))
-            shiftY = np.int(np.round(dy[i]))
+            if subPixel:
+                shiftX = dx[i]
+                shiftY = dy[i]
+            else:
+                shiftX = np.int(np.round(dx[i]))
+                shiftY = np.int(np.round(dy[i]))
             newImg.shift(shiftX, shiftY)
             
             # Append the shifted image
@@ -826,13 +1121,26 @@ class Image(object):
         else:
             print('Astrometry for {0:s} already solved.'.
               format(os.path.basename(self.filename)))
+    
+    def gradient(self, kernel='sobel'):
+        """Computes and returns the gradient (Gx, Gy) of the image using
+        either the Sobel or Prewitt opperators.
+        """
+        if kernel.upper() == 'SOBEL':
+            Gx = ndimage.sobel(self.arr, axis=1)
+            Gy = ndimage.sobel(self.arr, axis=0)
+        elif kernel.upper() == 'PREWITT':
+            Gx = ndimage.prewitt(self.arr, axis=1)
+            Gy = ndimage.prewitt(self.arr, axis=0)
+        else:
+            print('kernel value not recognized')
+            pdb.set_trace()
+        
+        return (Gx, Gy)
 
-    def show(self, axes = None,
-             cmap=None, norm=None, aspect=None, interpolation=None, alpha=None,
-             vmin=None, vmax=None, origin='lower', extent=None, shape=None,
-             filternorm=1, filterrad=4.0, imlim=None, resample=None,
-             hold=None, interactive=True, scale='linear', noShow=False):
-        '''Displays the image to the user for interaction (including clicking?)
+    def show(self, axes = None, interactive=True, scale='linear', noShow=False,
+             **kwargs):
+        """Displays the image to the user for interaction (including clicking?)
         This method includes all the same keyword arguments as the "imshow()"
         method from matplotlip.pyplot. This allows the user to control how the
         image is displayed.
@@ -841,7 +1149,7 @@ class Image(object):
         scale -- ['linear' | 'log']
                  allows the user to specify if if the image stretch should be
                  linear or log space
-        '''
+        """
         
         # Set the scaling for the image
         if scale == 'linear':
@@ -863,26 +1171,11 @@ class Image(object):
             # Create a new figure and axes
             fig  = plt.figure(figsize = (8,8))
             axes = fig.add_subplot(1,1,1)
-            axIm = axes.imshow(showArr,
-                               cmap=cmap, norm=norm, aspect=aspect,
-                               interpolation=interpolation, alpha=alpha,
-                               vmin=vmin, vmax=vmax, origin=origin,
-                               extent=extent, shape=shape,
-                               filternorm=filternorm, filterrad=filterrad,
-                               imlim=imlim, resample=resample)#, hold=hold)
+            axIm = axes.imshow(showArr, **kwargs)
 
         else:
             fig  = axes.figure
-            axIm = axes.imshow(showArr,
-                               cmap=cmap, norm=norm, aspect=aspect,
-                               interpolation=interpolation, alpha=alpha,
-                               vmin=vmin, vmax=vmax, origin=origin,
-                               extent=extent, shape=shape,
-                               filternorm=filternorm, filterrad=filterrad,
-                               imlim=imlim, resample=resample)#, hold=hold)
-                      # Is the "hold" keyword a new one??? It is listed in the
-                      # documentation for matplotlib.pyplot
-        
+            axIm = axes.imshow(showArr, **kwargs)        
         # TODO detirmine how to handle axis labels and titles
         
 #        axes.set_xlabel('X position [pix]')
@@ -897,3 +1190,10 @@ class Image(object):
         
         # Return the graphics objects to the user
         return (fig, axes, axIm)
+
+    def coordinates(axes):
+        """This method will overplot the image coordinate markings (RA, Dec)
+        on the specified axes.
+        """
+        
+        

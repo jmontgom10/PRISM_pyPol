@@ -17,122 +17,30 @@ from matplotlib import pyplot as plt
 import pdb
 from pyPol import Image
 
-#******************************************************************************
-# Write a quick function to provide list string searching...
-def str_list_contains(inList, searchStr):
-    """This function searches the elements of a list of strings for matches.
-    
-    parameters:
-    inList    -- a list containing ONLY strings
-    searchStr -- a string to search for...
-    """
-    
-    # Check that the searchStr parameter is a string
-    if not isinstance(searchStr, str):
-        print('The searhcStr parameter must be a string')
-        return None
-    
-    outList = []
-    for el in inList:
-        # Check that this element is also a string
-        if not isinstance(el, str):
-            print('All elements of the inList parameter must be pure strings')
-            return None
-        
-        outList.append(el.__contains__(searchStr))
-    
-    return outList
-#******************************************************************************
-
 # This script will run the image averaging step of the pyPol reduction
 
-#******************************************************************************
-# First the user must identify the names of the targets to be batched
-#******************************************************************************
-targets = ['M104', 'M78', 'M82', 'NGC2023', 'NGC7023', 'NGC_1977']
-
-#Setup the path delimeter for this operating system
-delim = os.path.sep
-
-# Grab all the *.fits files in the reduced science data directory
-reducedDir = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
-fileList   = []
-for file in os.listdir(reducedDir):
-    filePath = os.path.join(reducedDir, file)
-    fileTest = os.path.isfile(filePath)
-    extTest  = (os.path.splitext(filePath)[1] == '.fits')
-    if fileTest and extTest:
-        fileList.extend([os.path.join(reducedDir, file)])
+# Read in the indexFile data and select the filenames
+print('\nReading file index from disk')
+indexFile = 'fileIndex.csv'
+fileIndex = Table.read(indexFile, format='csv')
+#fileIndex = ascii.read(indexFile, guess=False, delimiter=',')
+fileList  = fileIndex['Filename']
 
 # Setup new directory for plate scale histograms data
+delim         = os.path.sep
+reducedDir    = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
 astroCheckDir = reducedDir + delim + 'astrometryCheck'
 if (not os.path.isdir(astroCheckDir)):
     os.mkdir(astroCheckDir, 0o755)
 
 failedAstroFile = astroCheckDir + delim + 'failedAstro.dat'
 
-
-# Sort the fileList
-fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
-fileNums = [num.split('_')[0] for num in fileNums]
-sortInds = np.argsort(np.array(fileNums, dtype = np.int))
-fileList = [fileList[ind] for ind in sortInds]
-
-# Setup new directory for polarimetry data
-polarimetryDir = reducedDir + delim + 'Polarimetry'
-if (not os.path.isdir(polarimetryDir)):
-    os.mkdir(polarimetryDir, 0o755)
-
-# Read the fileIndex back in as an astropy Table
-print('\nReading file index from disk')
-indexFile = 'fileIndex.dat'
-fileIndex = ascii.read(indexFile)
-
 # Determine which parts of the Fileindex pertain to science images
-keepFiles = []
-for file in fileIndex['Filename']:
-    Filename = file.split(delim)
-    Filename.reverse()
-    Filename = reducedDir + delim + Filename[0]
-    keepFiles.append(Filename in fileList)
+keepFiles = (fileIndex['Use'] == 1)
 
 # Update the fileIndex with the paths to reduced files
 fileIndex = fileIndex[np.where(keepFiles)]
 fileIndex['Filename'] = fileList
-
-# Read the groupDither back in as an astropy Table
-print('\nReading dither index from disk')
-groupDither = ascii.read('groupDither.dat')
-
-
-# Use the groupDither information to add a "Dither" column to the fileIndex
-nullStr    = 'ThisDitherIsNotRecorded'
-ditherList = np.array([nullStr]*len(fileIndex))
-for group, dither in groupDither:
-    groupInds = np.where(str_list_contains(fileIndex['Group'].data, group))
-    ditherList[groupInds] = dither
-
-# Add a "Dither" column to the fileIndex
-fileIndex.add_column(Column(name='Dither', data=ditherList), index=5)
-
-# Prepare to add a 'Target' Column to the fileIndex
-nullStr   = "ThisIsNotATarget"
-groupList = []
-groupList.extend(fileIndex['Group'].data)
-targetList = np.array([nullStr]*len(groupList))
-
-# Loop through each of the targets and identify
-# which groups are assigned to each target.
-for target in targets:
-    targetInds = np.where(str_list_contains(groupList, target))
-    targetList[targetInds] = target
-
-# Add a "Target" column to the fileIndex
-fileIndex.add_column(Column(name='Target', data=targetList), index=2)
-
-# Remove non-target elements of the fileIndex
-keepFiles = [not i for i in str_list_contains(targetList, nullStr)]
-fileIndex = fileIndex[np.where(keepFiles)]
 
 # Group the fileIndex by...
 # 1. Target

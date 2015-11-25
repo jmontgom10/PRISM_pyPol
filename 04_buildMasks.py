@@ -3,36 +3,9 @@ import numpy as np
 from matplotlib import pyplot as plt
 from astropy.io import ascii
 from astropy.table import Column as Column
+from astropy.table import Table as Table
 import pdb
 from pyPol import Image
-
-#******************************************************************************
-# Write a quick function to provide list string searching...
-#******************************************************************************
-def str_list_contains(inList, searchStr):
-    """This function searches the elements of a list of strings for matches.
-    
-    parameters:
-    inList    -- a list containing ONLY strings
-    searchStr -- a string to search for...
-    """
-    
-    # Check that the searchStr parameter is a string
-    if not isinstance(searchStr, str):
-        print('The searhcStr parameter must be a string')
-        return None
-    
-    outList = []
-    for el in inList:
-        # Check that this element is also a string
-        if not isinstance(el, str):
-            print('All elements of the inList parameter must be pure strings')
-            return None
-        
-        outList.append(el.__contains__(searchStr))
-    
-    return outList
-
 
 #******************************************************************************
 # Define the event handlers for clicking and keying on the image display
@@ -195,86 +168,42 @@ yList     = []
 imgNum    = 0      # This number will be the FIRST image to be displayed center...
 brushSize = 3      # (5xbrushSize pix) is the size of the region masked
 
-#******************************************************************************
-# First the user must identify the names of the targets to be batched
-# (in this case we only need to worry about reflection nebulae)
-#******************************************************************************
-targets = ['NGC2023', 'NGC7023', 'NGC_1977']
+# This script will run the mask building step of the pyPol reduction
+
+# The user can speed up the process by defining the "Target" values from
+# the fileIndex to be considered for masking.
+# Masks can onlybe produced for targets in this list.
+targets = ['NGC2023', 'NGC7023', 'NGC1977', 'M78']
 
 #Setup the path delimeter for this operating system
 delim = os.path.sep
 
-# Grab all the *.fits files in the reduced science data directory
+# Define the directory where the reduced data is located
 reducedDir = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
-fileList   = []
-for file in os.listdir(reducedDir):
-    filePath = os.path.join(reducedDir, file)
-    fileTest = os.path.isfile(filePath)
-    extTest  = (os.path.splitext(filePath)[1] == '.fits')
-    if fileTest and extTest:
-        fileList.extend([os.path.join(reducedDir, file)])
-
-# Sort the fileList
-fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
-fileNums = [num.split('_')[0] for num in fileNums]
-sortInds = np.argsort(np.array(fileNums, dtype = np.int))
-fileList = [fileList[ind] for ind in sortInds]
 
 # Setup new directory for polarimetry data
 maskDir = reducedDir + delim + 'Masks'
 if (not os.path.isdir(maskDir)):
     os.mkdir(maskDir, 0o755)
 
-# Read the fileIndex back in as an astropy Table
+# Read in the indexFile data and select the filenames
 print('\nReading file index from disk')
-indexFile = 'fileIndex.dat'
-fileIndex = ascii.read(indexFile)
+indexFile = 'fileIndex.csv'
+fileIndex = Table.read(indexFile, format='csv')
+#fileIndex = ascii.read(indexFile, guess=False, delimiter=',')
+fileList  = fileIndex['Filename']
 
-# Determine which parts of the Fileindex pertain to science images
-keepFiles = []
-for file in fileIndex['Filename']:
-    Filename = file.split(delim)
-    Filename.reverse()
-    Filename = reducedDir + delim + Filename[0]
-    keepFiles.append(Filename in fileList)
+
+# Determine which parts of the fileIndex pertain to science images
+useFiles = np.logical_and((fileIndex['Use'] == 1), (fileIndex['Dither'] == 'ABBA'))
+
+# Further restrict the selection to only include the selected targets
+targetFiles = np.array([False]*len(fileIndex), dtype=bool)
+for target in targets:
+    targetFiles = np.logical_or(targetFiles, (fileIndex['Target'] == target))
 
 # Update the fileIndex with the paths to reduced files
-fileIndex = fileIndex[np.where(keepFiles)]
-fileIndex['Filename'] = fileList
-
-# Read the groupDither back in as an astropy Table
-print('\nReading dither index from disk')
-groupDither = ascii.read('groupDither.dat')
-
-
-# Use the groupDither information to add a "Dither" column to the fileIndex
-nullStr    = 'ThisDitherIsNotRecorded'
-ditherList = np.array([nullStr]*len(fileIndex))
-for group, dither in groupDither:
-    groupInds = np.where(str_list_contains(fileIndex['Group'].data, group))
-    ditherList[groupInds] = dither
-
-# Add a "Dither" column to the fileIndex
-fileIndex.add_column(Column(name='Dither', data=ditherList), index=5)
-
-# Prepare to add a 'Target' Column to the fileIndex
-nullStr   = "ThisIsNotATarget"
-groupList = []
-groupList.extend(fileIndex['Group'].data)
-targetList = np.array([nullStr]*len(groupList))
-
-# Loop through each of the targets and identify
-# which groups are assigned to each target.
-for target in targets:
-    targetInds = np.where(str_list_contains(groupList, target))
-    targetList[targetInds] = target
-
-# Add a "Target" column to the fileIndex
-fileIndex.add_column(Column(name='Target', data=targetList), index=2)
-
-# Remove non-target elements of the fileIndex
-keepFiles = [not i for i in str_list_contains(targetList, nullStr)]
-fileIndex = fileIndex[np.where(keepFiles)]
+fileIndex = fileIndex[np.where(np.logical_and(useFiles, targetFiles))]
 
 # Group the fileIndex by...
 # 1. Target
@@ -296,15 +225,8 @@ for group in fileIndexByTarget.groups:
         pdb.set_trace()
     else:
         imgOnTarget   = [True, False, False, True]*np.int(numImgs/4)
-        onTargetInds  = np.where(imgOnTarget)[0]
         onTargetFiles = (group['Filename'])[np.where(imgOnTarget)]
         fileList.extend(onTargetFiles)
-
-#******************************************************************************
-# Sort the final file list
-# NOT SORTING MAKES THE MASKING TASK A BIT EASIER
-#fileList = np.sort(fileList)
-#******************************************************************************
 
 #*************************************
 # Now prepare to plot the first images

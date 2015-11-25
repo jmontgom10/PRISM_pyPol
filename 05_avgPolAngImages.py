@@ -8,6 +8,7 @@ Created on Sat Aug 29 17:03:39 2015
 import os
 import numpy as np
 from astropy.io import ascii
+from astropy.table import Table as Table
 from astropy.table import Column as Column
 from astropy.convolution import Gaussian2DKernel
 from astropy.stats import gaussian_fwhm_to_sigma
@@ -15,114 +16,35 @@ from photutils import detect_sources, Background
 import pdb
 from pyPol import Image
 
-#******************************************************************************
-# Write a quick function to provide list string searching...
-def str_list_contains(inList, searchStr):
-    """This function searches the elements of a list of strings for matches.
-    
-    parameters:
-    inList    -- a list containing ONLY strings
-    searchStr -- a string to search for...
-    """
-    
-    # Check that the searchStr parameter is a string
-    if not isinstance(searchStr, str):
-        print('The searhcStr parameter must be a string')
-        return None
-    
-    outList = []
-    for el in inList:
-        # Check that this element is also a string
-        if not isinstance(el, str):
-            print('All elements of the inList parameter must be pure strings')
-            return None
-        
-        outList.append(el.__contains__(searchStr))
-    
-    return outList
-#******************************************************************************
-
 # This script will run the image averaging step of the pyPol reduction
-
-#******************************************************************************
-# First the user must identify the names of the targets to be batched
-#******************************************************************************
-targets = ['M104', 'M78', 'M82', 'NGC2023', 'NGC7023', 'NGC_1977']
 
 #Setup the path delimeter for this operating system
 delim = os.path.sep
 
 # Grab all the *.fits files in the reduced science data directory
 reducedDir = '/home/jordan/ThesisData/PRISM_Data/Reduced_data'
-fileList   = []
-for file in os.listdir(reducedDir):
-    filePath = os.path.join(reducedDir, file)
-    fileTest = os.path.isfile(filePath)
-    extTest  = (os.path.splitext(filePath)[1] == '.fits')
-    if fileTest and extTest:
-        fileList.extend([os.path.join(reducedDir, file)])
-
-# Sort the fileList
-fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
-fileNums = [num.split('_')[0] for num in fileNums]
-sortInds = np.argsort(np.array(fileNums, dtype = np.int))
-fileList = [fileList[ind] for ind in sortInds]
 
 # Setup new directory for polarimetry data
 polarimetryDir = reducedDir + delim + 'Polarimetry'
 if (not os.path.isdir(polarimetryDir)):
-    os.mkdir(polarimetryDir, 0o755)
+    os.mkdir(polAngDir, 0o755)
 
-# Read the fileIndex back in as an astropy Table
+polAngDir = reducedDir + delim + 'Polarimetry' + delim + 'polAngImgs'
+if (not os.path.isdir(polAngDir)):
+    os.mkdir(polAngDir, 0o755)
+
+# Read in the indexFile data and select the filenames
 print('\nReading file index from disk')
-indexFile = 'fileIndex.dat'
-fileIndex = ascii.read(indexFile)
+indexFile = 'fileIndex.csv'
+fileIndex = Table.read(indexFile, format='csv')
+#fileIndex = ascii.read(indexFile, guess=False, delimiter=',')
+fileList  = fileIndex['Filename']
 
-# Determine which parts of the Fileindex pertain to science images
-keepFiles = []
-for file in fileIndex['Filename']:
-    Filename = file.split(delim)
-    Filename.reverse()
-    Filename = reducedDir + delim + Filename[0]
-    keepFiles.append(Filename in fileList)
+# Determine which parts of the fileIndex pertain to science images
+useFiles = np.logical_and((fileIndex['Use'] == 1), (fileIndex['Dither'] == 'ABBA'))
 
-# Update the fileIndex with the paths to reduced files
-fileIndex = fileIndex[np.where(keepFiles)]
-fileIndex['Filename'] = fileList
-
-# Read the groupDither back in as an astropy Table
-print('\nReading dither index from disk')
-groupDither = ascii.read('groupDither.dat')
-
-
-# Use the groupDither information to add a "Dither" column to the fileIndex
-nullStr    = 'ThisDitherIsNotRecorded'
-ditherList = np.array([nullStr]*len(fileIndex))
-for group, dither in groupDither:
-    groupInds = np.where(str_list_contains(fileIndex['Group'].data, group))
-    ditherList[groupInds] = dither
-
-# Add a "Dither" column to the fileIndex
-fileIndex.add_column(Column(name='Dither', data=ditherList), index=5)
-
-# Prepare to add a 'Target' Column to the fileIndex
-nullStr   = "ThisIsNotATarget"
-groupList = []
-groupList.extend(fileIndex['Group'].data)
-targetList = np.array([nullStr]*len(groupList))
-
-# Loop through each of the targets and identify
-# which groups are assigned to each target.
-for target in targets:
-    targetInds = np.where(str_list_contains(groupList, target))
-    targetList[targetInds] = target
-
-# Add a "Target" column to the fileIndex
-fileIndex.add_column(Column(name='Target', data=targetList), index=2)
-
-# Remove non-target elements of the fileIndex
-keepFiles = [not i for i in str_list_contains(targetList, nullStr)]
-fileIndex = fileIndex[np.where(keepFiles)]
+# Cull the file index to only include files selected for use
+fileIndex = fileIndex[np.where(useFiles)]
 
 # Group the fileIndex by...
 # 1. Target
@@ -141,37 +63,36 @@ for group in fileIndexByTarget.groups:
     thisPolAng   = str(np.unique(group['Polaroid Angle'].data)[0])
     
     # Test if this target-waveband-polAng combo was previously processed
-    outFile = (polarimetryDir + delim +
+    outFile = (polAngDir + delim +
            '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits')
+    
     if os.path.isfile(outFile):
         print('File ' + '_'.join([thisTarget, thisWaveband, thisPolAng]) +
               ' already exists... skipping to next group')
         continue
-    
-    #**************************************************************************
-    # NGC2023 IS TEMPORARILY OUT OF ORDER
-    #**************************************************************************
-    if thisTarget == 'NGC2023':
-        print('Skipping target NGC2023')
-        continue
-    
+        
     numImgs      = len(group)
     print('\nProcessing {0} images for'.format(numImgs))
-    print('\tTarget        : {0}'.format(thisTarget))
-    print('\tWaveband      : {0}'.format(thisWaveband))
-    print('\tPolaroid Angle: {0}'.format(thisPolAng))
-    #
-    # This will also require me to TEST that the (AB)BA pair is in order
-    # and that the AB(BA) pair is also in the correct order
-    #
-    # I need to include a step (somewhere) that parses the dither pattern
-    # for each "group"... NO CAN DO
-    # *** MY ABBA DITHERING IS DETERMINED BY HAND FROM THE LOGS ***
+    print('\tTarget         : {0}'.format(thisTarget))
+    print('\tWaveband       : {0}'.format(thisWaveband))
+    print('\tPolaroid Angle : {0}'.format(thisPolAng))
     
     # Read in the files of this group
     imgList    = []
     for file in group['Filename']:
-        tmpImg = Image(file)
+        tmpImg  = Image(file)
+        
+        # Test if this file has an associated mask
+        maskFile = maskDir + delim + os.path.basename(file)
+        if os.path.isfile(maskFile):
+            # Read in any associated mask and add it to the arr attribute
+            tmpMask = Image(maskFile)
+            
+            # Mask the image by setting masked values to "np.NaN"
+            tmpImg.arr[np.where(tmpMask.arr == 1)] = np.NaN
+#            tmpImg.arr = np.ma.array(tmpImg.arr, mask=tmpMask.arr, copy=True)
+        
+        # Grab the polaroid angle position from the header
         polPos = str(tmpImg.header['POLPOS'])
         
         # Check that the polPos value is correct
@@ -179,34 +100,24 @@ for group in fileIndexByTarget.groups:
             print('Image polaroid angle does not match expected value')
             pdb.set_trace()
         
-        # Only read in 2x2 binned images
-        if tmpImg.binning() == 2:
-            imgList.append(tmpImg)
-    
+        # If everything seems ok, then add this to the imgList
+        imgList.append(tmpImg)
+        
     del tmpImg
-    #
-    #*************************************************************************
-    # This is where I am... 
-    # I should assume that all these are ABBA dithers because I will cull
-    # the groups that were not dithered as ABBA ...
-    #**************************************************************************
-    #
+    
     # Process images in this group according to dither type
     ditherType = np.unique(group['Dither'].data)
-    if ditherType == "ABBA UQ":
+    if ditherType == "ABBA":
         # Test if ABBA pattern is there
         if (numImgs % 4) != 0:
             print('The ABBA pattern is not there...')
             pdb.set_trace()
+        
         A1 = imgList[0:len(imgList):4]
         B1 = imgList[1:len(imgList):4]
         B2 = imgList[2:len(imgList):4]
         A2 = imgList[3:len(imgList):4]
         
-#        testList = A1.copy()
-#        testList.extend(A2)
-#        testOutput = Image.align_stack(testList)
-
         # Initalize lists to store the background subtracted science images
         sciImgList = []
         
@@ -293,8 +204,7 @@ for group in fileIndexByTarget.groups:
         avgImg.header['CTYPE*'] = 'Linear Binned ADC Pixels'
         avgImg.header['NAXIS1'] = avgImg.arr.shape[1]
         avgImg.header['NAXIS2'] = avgImg.arr.shape[0]
-
- 
+        
         # I can only "redo the astrometry" if the file is written to disk
         avgImg.filename = 'tmp.fits'
         avgImg.write()

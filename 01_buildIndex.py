@@ -41,11 +41,6 @@ fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileL
 sortInds = np.argsort(np.array(fileNums, dtype = np.int))
 fileList = [fileList[ind] for ind in sortInds]
 
-groupIndexDir = reducedPath + delim + 'GroupIndices'
-if (not os.path.isdir(groupIndexDir)):
-    os.mkdir(groupIndexDir, 0o755)
-
-
 #==============================================================================
 # ***************************** INDEX *****************************************
 # Build an index of the file type and binning, and write it to disk
@@ -112,7 +107,7 @@ if not os.path.isfile(indexFile):
     
     # Loop through each "Name" and assign it a "Target" value
     targetList = []
-    
+    ditherList = []
     for group in groupFileIndex.groups:
         # Select this groups properties
         thisName = np.unique(group['Name'])
@@ -130,13 +125,39 @@ if not os.path.isfile(indexFile):
         thisTarget = input('\nEnter the target for group "{0}": '.format(thisName))
         thisTarget = [thisTarget]*groupLen
         
+        # Ask the user to supply the dither pattern for this group
+        thisDitherEntered = False
+        while not thisDitherEntered:
+            # Have the user select option 1 or 2
+            print('\nEnter the dither patttern for group "{0}": '.format(thisName))
+            thisDither = input('[1: ABBA, 2: HEX]')                
+            
+            # Test if the numbers 1 or 2 were entered
+            try:
+                thisDither = np.int(thisDither)
+                if (thisDither == 1) or (thisDither == 2):
+                    # If so, then reassign as a string
+                    thisDither = ['ABBA', 'HEX'][(thisDither-1)]
+                    thisDitherEntered = True
+            except: 
+                print('Response not recognized')
+        
+        # Create a list of "thisDither" entries
+        thisDither = [thisDither]*groupLen
+        
         # Add these elements to the target list
         targetList.extend(thisTarget)
+        ditherList.extend(thisDither)
     
     pdb.set_trace()
+    # Add the "Target" and "Dither columns"
     groupFileIndex.add_column(Column(name='Target',
                                 data=np.array(targetList)),
                                 index = 2)
+    groupFileIndex.add_column(Column(name='Dither',
+                                data=np.array(ditherList)),
+                                index = 7)
+    
     # Re-sort by file-number
     fileSortInds = np.argsort(groupFileIndex['Filename'])
     fileIndex1   = groupFileIndex[fileSortInds]
@@ -146,4 +167,3 @@ if not os.path.isfile(indexFile):
 else:
     # Read the fileIndex back in as an astropy Table
     print('\nDelete the old index before re-creating a new one.')
-    fileIndex = ascii.read(indexFile)#, guess=False, delimiter=' ')
