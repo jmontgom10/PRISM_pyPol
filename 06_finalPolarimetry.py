@@ -103,6 +103,16 @@ for group in fileIndexByTarget.groups:
     polAngImgs = dict(zip(polAngs, polAngImgs)) #aligned
     
     #**********************************************************************
+    # Stokes I
+    #**********************************************************************
+    stokesI = polAngImgs[0].copy()
+    stokesIarr = Image.stacked_average([polAngImgs[0],
+                                        polAngImgs[200],
+                                        polAngImgs[400],
+                                        polAngImgs[600]])
+    stokesI.arr = 2 * stokesIarr
+    
+    #**********************************************************************
     # Stokes U
     #**********************************************************************
     # Subtract the images to get stokes U
@@ -164,6 +174,8 @@ for group in fileIndexByTarget.groups:
     PAmap.arr[np.where(fullMask)] = np.NaN
 
     # Generate the output filenames
+    Ifile = (stokesDir + delim +
+               '_'.join([thisTarget, thisWaveband, 'I']) + '.fits')
     Ufile = (stokesDir + delim +
                '_'.join([thisTarget, thisWaveband, 'U']) + '.fits')
     Qfile = (stokesDir + delim +
@@ -174,6 +186,7 @@ for group in fileIndexByTarget.groups:
                '_'.join([thisTarget, thisWaveband, 'PA']) + '.fits')
     
     # Write to disk
+    stokesI.write(Ifile)
     stokesU.write(Ufile)
     stokesQ.write(Qfile)
     Pmap.write(Pfile)

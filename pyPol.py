@@ -10,7 +10,8 @@ import matplotlib.pyplot as plt
 from astropy.modeling import models, fitting
 from astropy.stats import sigma_clipped_stats
 from astropy.io import fits
-from astropy.wcs import WCS
+#from astropy.wcs import WCS
+from wcsaxes import WCS
 from astropy.coordinates import SkyCoord
 from astropy.wcs.utils import pixel_to_skycoord, skycoord_to_pixel
 from photutils import daofind
@@ -23,7 +24,7 @@ class Image(object):
     def __init__(self, filename=''):
         if len(filename) > 0:
             try:
-                HDUlist     = fits.open(filename)
+                HDUlist     = fits.open(filename, do_not_scale_image_data=True)
                 self.header = HDUlist[0].header.copy()
                 floatFlag   = self.header['BITPIX'] < 0
                 numBits     = np.abs(self.header['BITPIX'])
@@ -249,12 +250,50 @@ class Image(object):
 
         return output
     
+    def write(self, filename = ''):
+        # Test if a filename was provided and default to current filename
+        if len(filename) == 0:
+            filename = self.filename
+        
+        # Build a new HDU object to store the data
+        hdu = fits.PrimaryHDU(data = self.arr,
+                            header = self.header,
+                            do_not_scale_image_data=False)
+
+        # Replace the original header (since some cards may have been stripped)
+        hdu.header = self.header
+        hdulist = fits.HDUList([hdu])
+        
+        # Write file to disk
+        hdulist.writeto(filename, clobber=True)
+    
+    def scale(self, copy=False):
+        """Scales the data in the arr attribute using the BSCALE and BZERO
+        values from the header. If no such values exist, then return original
+        array.
+        """
+        # Scale the array
+        scaledArr = self.arr.copy()
+        keys = self.header.keys()
+        if 'BSCALE' in keys:
+            scaledArr = self.header['BSCALE']*scaledArr
+        if 'BZERO' in keys:
+            scaledArr = scaledArr + self.header['BZERO']
+        
+        # Check if a copy of the image was requested
+        if copy:
+            outImg = self.copy()
+            outImg.arr = scaledArr
+            return outImg
+        else:
+            self.arr = scaledArr
+    
     def rebin(self, binning, copy=False):
-        """Rebins the using the INTEGER number of bins specified by 'binning'.
-        If the image shape is a non-integer multiple of the image array, then
-        zero-padding is added to make the image shape a multiple of the
-        binning. If 'copy' is True, then the method will return a new copy of
-        the image with its array rebinned. Otherwise, the image will be
+        """Rebins the image using the INTEGER number of bins specified by
+        'binning'. If the image shape is a non-integer multiple of the image
+        array, then zero-padding is added to make the image shape a multiple of
+        the binning. If 'copy' is True, then the method will return a new copy
+        of the image with its array rebinned. Otherwise, the image will be
         rebinned in place.
         """
         # Make a copy of the array before applying padding or rebinning
@@ -264,34 +303,112 @@ class Image(object):
         remainderY = rebinArr.shape[0] % binning
         remainderX = rebinArr.shape[1] % binning
         if (remainderY != 0) or (remainderX != 0):
-            rebinArr = np.pad(rebinArr, ((0,remainderY),(0, remainderX)),
+            # Add padding where needed
+            rebinArr = np.pad(rebinArr, ((0, binning - remainderY),
+                                         (0, binning - remainderX)),
                               mode='constant')
         
         # Get the new shape for the array and compute the rebinning shape
-        newShape = self.arr.shape[0]//binning, self.arr.shape[1]//binning
+        newShape = rebinArr.shape[0]//binning, rebinArr.shape[1]//binning
         sh = (newShape[0],rebinArr.shape[0]//newShape[0],
               newShape[1],rebinArr.shape[1]//newShape[1])
         
-        # Reassign the image array to be the rebinned array
+        # Perform the actual rebinning
         rebinArr = rebinArr.reshape(sh).mean(-1).mean(1)
+        
+        # Check if there is a header needing modification
+        if hasattr(self, 'header'):
+            # Handle the necessary changes to the header
+            outHead = self.header.copy()
+            wcs = WCS(outHead)
+            
+            # First update the NAXIS keywords
+            outHead['NAXIS1'] = newShape[1]
+            outHead['NAXIS2'] = newShape[0]
+                        
+            # Now update the CRPIX and CRVAL values
+            outHead['CRPIX1'] = outHead['CRPIX1']/binning
+            outHead['CRPIX2'] = outHead['CRPIX2']/binning
+            outHead['CRDELT1'] = binning * outHead['CRDELT1']
+            outHead['CRDELT2'] = binning * outHead['CRDELT2']
+                        
+            try:
+                # Attempt to use CD matrix corrections, first
+                # Apply updates to CD valus
+                outCD = binning * wcs.wcs.cd
+                outHead['CD1_1'] = outCD[0,0]
+                outHead['CD1_2'] = outCD[0,1]
+                outHead['CD2_1'] = outCD[1,0]
+                outHead['CD2_2'] = outCD[1,1]
+            except:
+                # If there were no CD values, then try PC values
+                try:
+                    # Apply updates to CDELT valus
+                    outHead['CDELT1'] = binning * outHead['CDELT1']
+                    outHead['CDELT2'] = binning * outHead['CDELT2']
+                except:
+                    pass
+        else:
+            # If no header exists, then buil a basic one
+            keywords = ['NAXIS2', 'NAXIS1']
+            values   = newShape
+            headDict = dict(zip(keywords, values))
+            outHead  = fits.Header(headDict)
         
         if copy:
             # If a copy was requesty, then return a copy of the original image
             # with a newly rebinned array
-            outImg     = self.copy()
-            outImg.arr = rebinArr
+            outImg         = self.copy()
+            outImg.arr     = rebinArr
+            outImg.header  = outHead
+            outImg.binning = binning * outImg.binning
             return outImg
         else:
             # Otherwise place the rebinned array directly into the Image object
-            self.arr = rebinArr
+            self.arr    = rebinArr
+            self.header = outHead
+            self.binning = binning * self.binning
     
-    def write(self, filename = ''):
-        # Test if a filename was provided and default to current filename
-        if len(filename) == 0:
-            filename = self.filename
+    def crop(self, x1, x2, y1, y2, copy=False):
+        """This method crops the image array to the locations specified by the
+        arguments and updates the header to match the new array.
+        """
         
-        # Write the file to disk
-        fits.writeto(filename, self.arr, header = self.header, clobber = True)
+        # Check that the crop values are reasonable
+        ny, nx = self.arr.shape
+        if ((x1 < 0) or (x2 > (nx - 1)) or
+            (y1 < 0) or (y2 > (ny - 1)) or
+            (x2 < x1) or (y2 < y1)):
+            print('bad crop values')
+            return None
+        
+        # Make a copy of the array and header
+        cropArr = self.arr.copy()
+        outHead = self.header.copy()
+        
+        # Perform the actual croping
+        cropArr = cropArr[y1:y2, x1:x2]
+        
+        # Update the header keywords
+        # First update the NAXIS keywords
+        outHead['NAXIS1'] = y2 - y1
+        outHead['NAXIS2'] = x2 - x1
+        
+        # Next update the CRPIX keywords
+        outHead['CRPIX1'] = outHead['CRPIX1'] - x1
+        outHead['CRPIX2'] = outHead['CRPIX2'] - y1
+        
+        if copy:
+            # If a copy was requesty, then return a copy of the original image
+            # with a newly cropped array
+            outImg        = self.copy()
+            outImg.arr    = cropArr
+            outImg.header = outHead
+            return outImg
+        else:
+            # Otherwise place the rebinned array directly into the Image object
+            self.arr    = cropArr
+            self.header = outHead
     
     def shift(self, dx, dy):
         """A method to shift the image dx pixels to the right and dy pixels up.
@@ -1138,8 +1255,9 @@ class Image(object):
         
         return (Gx, Gy)
 
-    def show(self, axes = None, interactive=True, scale='linear', noShow=False,
-             **kwargs):
+    def show(self, axes=None, origin='lower', noShow=False,
+             scale='linear', vmin=None, vmax=None,
+             ticks=True, **kwargs):
         """Displays the image to the user for interaction (including clicking?)
         This method includes all the same keyword arguments as the "imshow()"
         method from matplotlip.pyplot. This allows the user to control how the
@@ -1153,34 +1271,88 @@ class Image(object):
         
         # Set the scaling for the image
         if scale == 'linear':
-            showArr = self.arr            
+            showArr = self.arr
+            if vmin == None: vmin = np.min(self.arr)
+            if vmax == None: vmax = np.max(self.arr)
         elif scale == 'log':
             showArr = np.log10(self.arr)
-            vmin    = np.log10(vmin)
-            vmax    = np.log10(vmax)
+            if vmin == None:
+                vmin = -6
+            else:
+                vmin = np.log10(vmin)
+            if vmax == None:
+                vmax = np.max(showArr)
+            else:
+                vmax = np.log10(vmax)
+                
+            print(vmin)
+            print(vmax)
+            print(np.nanmin(showArr))
+            print(np.nanmax(showArr))
         elif scale == 'asinh':
             showArr = np.arcsinh(self.arr)
-            vmin    = np.arcsinh(vmin)
-            vmax    = np.arcsinh(vmax)
+            if vmin == None:
+                vmin = np.min(showArr)
+            else:
+                vmin = np.arcsinh(vmin)
+            if vmax == None:
+                vmax = np.max(showArr)
+            else:
+                vmax = np.arcsinh(vmax)
         else:
             print('The provided "scale" keyword is not recognized')
             pdb.set_trace()
         
         # Create the figure and axes for displaying the image
         if axes is None:
+            # TODO add a check for WCS values
+            
             # Create a new figure and axes
+            wcs  = WCS(self.header)
             fig  = plt.figure(figsize = (8,8))
-            axes = fig.add_subplot(1,1,1)
-            axIm = axes.imshow(showArr, **kwargs)
+            axes = fig.add_subplot(1,1,1, projection=wcs)
+            
+            # Set the axes line properties
+            for axis in ['top','bottom','left','right']:
+                axes.spines[axis].set_linewidth(4)
 
+            # Set the axes linewidth
+            axes.coords.frame.set_linewidth(2)
+            
+            # Label the axes establish minor ticks.
+            RA_ax  = axes.coords[0]
+            Dec_ax = axes.coords[1]
+            RA_ax.set_axislabel('RA [J2000]',
+                                fontsize=12, fontweight='bold')
+            Dec_ax.set_axislabel('Dec [J2000]',
+                                 fontsize=12, fontweight='bold', minpad=-0.4)
+
+            # Set tick labels
+            RA_ax.set_major_formatter('hh:mm')
+            Dec_ax.set_major_formatter('dd:mm')
+            
+            # Set the tick width and length
+            RA_ax.set_ticks(size=12, width=2)
+            Dec_ax.set_ticks(size=12, width=2)
+            
+            # Set the other tick label format
+            RA_ax.set_ticklabel(fontsize=12, fontweight='demibold')
+            Dec_ax.set_ticklabel(fontsize=12, fontweight='demibold')
+            
+            # Turn on minor ticks
+            RA_ax.display_minor_ticks(True)
+            RA_ax.set_minor_frequency(6)
+            Dec_ax.display_minor_ticks(True)
+            RA_ax.set_minor_frequency(6)
+            
+            # Put the image in its place
+            axIm = axes.imshow(showArr, origin=origin, vmin=vmin, vmax=vmax,
+                               **kwargs)
         else:
+            # Use the provided axes
             fig  = axes.figure
-            axIm = axes.imshow(showArr, **kwargs)        
-        # TODO detirmine how to handle axis labels and titles
-        
-#        axes.set_xlabel('X position [pix]')
-#        axes.set_ylabel('Y position [pix]')
-#        axes.set_title(os.path.basename(self.filename))
+            axIm = axes.imshow(showArr, origin=origin, vmin=vmin, vmax=vmax,
+                               **kwargs)        
         
         # Display the image to the user, if requested
         if not noShow:
@@ -1190,10 +1362,4 @@ class Image(object):
         
         # Return the graphics objects to the user
         return (fig, axes, axIm)
-
-    def coordinates(axes):
-        """This method will overplot the image coordinate markings (RA, Dec)
-        on the specified axes.
-        """
-        
         
