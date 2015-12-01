@@ -5,6 +5,7 @@ Created on Sat Nov 28 17:08:13 2015
 @author: jordan
 """
 import os
+import copy
 import numpy as np
 from astropy.table import Table, hstack
 from astropy.stats import sigma_clipped_stats
@@ -91,7 +92,7 @@ for group in fileIndexByTarget.groups:
     # Form a "catalog" of position entries for matching
     ra1      = starCatalog['RAJ2000']
     dec1     = starCatalog['DEJ2000']
-    catalog1 = SkyCoord(ra = ra1, dec = dec1)
+    catalog1 = SkyCoord(ra = ra1, dec = dec1, frame = 'fk5')
     
     # Read in the image and find tars in the image
     Ifile = (stokesDir + delim +
@@ -108,7 +109,7 @@ for group in fileIndexByTarget.groups:
     # Convert source positions to RA and Dec
     wcs      = WCS(stokesI.header)
     ADstars  = wcs.all_pix2world(sources['xcentroid'], sources['ycentroid'], 0)
-    catalog2 = SkyCoord(ra = ADstars[0]*u.deg, dec = ADstars[1]*u.deg)
+    catalog2 = SkyCoord(ra = ADstars[0]*u.deg, dec = ADstars[1]*u.deg, frame = 'fk5')
     
     
     ###
@@ -216,7 +217,7 @@ for group in fileIndexByTarget.groups:
     yStars     = yStars[keepInds]
     phot_table = phot_table[keepInds]
     ADstars    = wcs.all_pix2world(xStars, yStars, 0)
-    catalog2   = SkyCoord(ra = ADstars[0]*u.deg, dec = ADstars[1]*u.deg)
+    catalog2   = SkyCoord(ra = ADstars[0]*u.deg, dec = ADstars[1]*u.deg, frame='fk5')
     
     # Now that we have a final star list,
     # let's match this catalog to the NOMAD "catalog1"
@@ -224,13 +225,75 @@ for group in fileIndexByTarget.groups:
     idx, sep2d, dist3d = catalog2.match_to_catalog_sky(catalog1)
     starCatalog1 = starCatalog[idx]
     
+    ###########################################################################
+    # Check with the user if the selected stars are photometrically viable
+    ###########################################################################
+    fig, ax, axIm = stokesI.show(cmap='cubehelix', vmin=0, vmax=300)
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    tr_fk5 = ax.get_transform("fk5")
+    
+#    plotAps = CircularAnnulus(catalog2[0], catalog2[1], rin = 12.0, rout = 14.0)
+#    plotAps.positions = wcs.all_pix2world()
+#    annulus_apertures.plot(ax=ax, transform=tr_fk5, color='red')
+    line1, = ax.plot(ADstars[0], ADstars[1],
+                     transform=tr_fk5, linestyle='None', 
+                     marker='o', markersize=10.0, markeredgewidth=2.0,
+                     markeredgecolor='red', fillstyle='none')
+    axTexts = []
+    for i in range(len(ADstars[0])):
+        axTexts.append(ax.text(ADstars[0][i], ADstars[1][i] + 10.0/3600.0,
+                               str(i), horizontalalignment='center',
+                               color='green', transform=tr_fk5))
+    line2, = ax.plot(starCatalog1['RAJ2000'], starCatalog1['DEJ2000'],
+                     transform=tr_fk5, linestyle='None',
+                     marker='x', markeredgewidth=2.0,
+                     markeredgecolor='blue', fillstyle='none')
+    ax.set_xlim(*xlim), ax.set_ylim(*ylim)
+    
+    # Print a prompt to the user
+    print('\nType the index of stars which should be removed from this matching.')
+    print('Type "done" to exit deletion loop.')
+    inputText = ''
+    starIndices = []
+    while inputText.upper() != 'DONE':
+        inputText = input("Enter a star index: ")
+        if inputText.isdigit():
+            # Remove stars that were selected
+            starIndex = int(inputText)
+            starIndices.append(starIndex)
+            axTexts[starIndex].set_color('red')
+            fig.canvas.draw()
+    
+    plt.close(fig)
+    
+    # Remove the specified stars from the catalogs and multFactors
+    if len(starIndices) > 0:
+        keepStars = np.array([True]*len(ADstars[0]), dtype=bool)
+        keepStars[np.array(starIndices)] = False
+        ADstars      = (ADstars[0][keepStars], ADstars[1][keepStars])
+        starCatalog1 = starCatalog1[keepStars]
+        catalog2     = catalog2[keepStars]
+        phot_table   = phot_table[keepStars]
+    
     # Compute the expected instrumental fluxes for these stars
     instFlux = np.array(10.0**(-0.4*starCatalog1[thisMag]))
     
     # Divide and compute a comparative multiplicative factor
     multFacts = np.array(phot_table['residual_aperture_sum']/instFlux)
-    multFact, med, std = sigma_clipped_stats(multFacts, sigma=3.0, iters=5)    
+    multFact, med, std = sigma_clipped_stats(multFacts, sigma=2.5, iters=5)
     multFact1 = 1.0/multFact
+    
+    # Plot the deltaMag distribution to check if it is centered about zero
+    num1, bins1, patches1 = plt.hist(multFacts)
+    non_clipped = np.abs(multFacts - med) < 1.5*std
+    num2, bins2, patches2 = plt.hist(multFacts[np.where(non_clipped)])
+    plt.plot([multFact, multFact], [0, np.max(np.array([num1, num2]))])
+    plt.ion()
+    plt.show()
+    plt.ioff()
+    input("Press ENTER to continue")
+    plt.close()
+#    pdb.set_trace()
 
     
 #    ###########################################################################
@@ -257,7 +320,11 @@ for group in fileIndexByTarget.groups:
 #    instMag   = -2.5*np.log10(phot_table['residual_aperture_sum'])
 #    deltaMags = np.array(instMag - starCatalog1[thisMag])
 #    deltaMag, med, std = sigma_clipped_stats(deltaMags, sigma=3.0, iters=5)
-
+#
+#    # Plot the deltaMag distribution to check if it is centered about zero
+#    num, bins, patches = plt.hist(deltaMags)
+#    plt.plot([deltaMag, deltaMag], [0, np.max(num)])
+#    plt.show()
     
     # Perform the final conversion to Jy/arcsec^2
     wcs = WCS(stokesI.header)
