@@ -46,7 +46,8 @@ fileList = [fileList[ind] for ind in sortInds]
 # Build an index of the file type and binning, and write it to disk
 #==============================================================================
 # Check if a file index already exists... if it does then just read it in
-indexFile = 'fileIndex.csv'
+indexFile = reducedPath + 'fileIndex.csv'
+
 if not os.path.isfile(indexFile):
     # Loop through each night and test for image type
     print('\nCategorizing files by groups.\n')
