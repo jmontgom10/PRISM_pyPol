@@ -50,7 +50,13 @@ you should not use different target names for different wavelengths. For
 example, do **not** use "NGC7023_R" to refer to R-band observations of NGC7023
 and "NGC7023_V" to refer to V-band observations of NGC7023, use "NGC7023" to
 refer to both, and the scripts will figure out which observations are R-band vs.
-V-band.
+V-band. Of course, if you make a mistake, the file index will be saved as a .csv
+file, so you can easily edit the file using your favorite .csv editor (excel,
+open office, etc...).
+
+The indexing script also adds a "Use" flag column to the index. Files with a 1
+in this column will be used in the final polarimetry analysis while files with a
+0 in this column will be omitted.
 
 ## 02_doAstrometry.py
 
