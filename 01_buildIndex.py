@@ -26,15 +26,15 @@ delim = os.path.sep
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of the raw data for the observing run
-reducedPath = '/home/jordan/ThesisData/PRISM_Data/Reduced_data/'
+reducedDir = '/home/jordan/ThesisData/PRISM_Data/Reduced_data/'
 
 #Loop through each night and build a list of all the files in observing run
 fileList = []
-for file in os.listdir(reducedPath):
+for file in os.listdir(reducedDir):
     # Check that the file is not actually a directory
-    filePath = os.path.join(reducedPath, file)
+    filePath = os.path.join(reducedDir, file)
     if not os.path.isdir(filePath):
-        fileList.extend([os.path.join(reducedPath, file)])
+        fileList.extend([os.path.join(reducedDir, file)])
 
 #Sort the fileList
 fileNums = [''.join((file.split(delim).pop().split('.'))[0:2]) for file in fileList]
@@ -46,13 +46,13 @@ fileList = [fileList[ind] for ind in sortInds]
 # Build an index of the file type and binning, and write it to disk
 #==============================================================================
 # Check if a file index already exists... if it does then just read it in
-indexFile = reducedPath + 'fileIndex.csv'
+indexFile = reducedDir + 'fileIndex.csv'
 
 if not os.path.isfile(indexFile):
     # Loop through each night and test for image type
     print('\nCategorizing files by groups.\n')
     startTime = os.times().elapsed
-    
+
     # Begin by initalizing some arrays to store the image classifications
     obsType  = []
     name     = []
@@ -61,12 +61,12 @@ if not os.path.isfile(indexFile):
     waveBand = []
     fileCounter = 0
     percentage  = 0
-    
+
     #Loop through each file in the fileList variable
     for file in fileList:
         # Read in the image
         tmpImg = Image(file)
-        
+
         # Classify each file type and binning
         tmpName = tmpImg.header['OBJECT']
         if len(tmpName) < 1:
@@ -74,24 +74,24 @@ if not os.path.isfile(indexFile):
         name.append(tmpName)
         polAng.append(tmpImg.header['POLPOS'])
         waveBand.append(tmpImg.header['FILTNME3'])
-        
+
         # Test the binning of this file
         binTest  = tmpImg.header['CRDELT*']
         if binTest[0] == binTest[1]:
             binType.append(int(binTest[0]))
-    
+
         # Count the files completed and print update progress message
         fileCounter += 1
         percentage1  = np.floor(fileCounter/len(fileList)*100)
         if percentage1 != percentage:
             print('completed {0:3g}%'.format(percentage1), end="\r")
         percentage = percentage1
-        
+
     endTime  = os.times().elapsed
     numFiles = len(fileList)
     print(('\n{0} File processing completed in {1:g} seconds'.
            format(numFiles, (endTime -startTime))))
-    
+
     # Write the file index to disk
     fileIndex = Table([fileList, name, waveBand, polAng, binType],
                       names = ['Filename', 'Name', 'Waveband', 'Polaroid Angle', 'Binning'])
@@ -99,40 +99,40 @@ if not os.path.isfile(indexFile):
                                 data=np.ones((numFiles)),
                                 dtype=np.int),
                                 index = 0)
-    
+
     # Group by "Name"
     groupFileIndex = fileIndex.group_by('Name')
-    
+
     # Grab the file-number orderd indices for the groupFileIndex
     fileIndices = np.argsort(groupFileIndex['Filename'])
-    
+
     # Loop through each "Name" and assign it a "Target" value
     targetList = []
     ditherList = []
     for group in groupFileIndex.groups:
         # Select this groups properties
         thisName = np.unique(group['Name'])
-        
+
         # Test if the group name truely is unique
         if len(thisName) == 1:
             thisName = thisName[0]
         else:
             print('There is more than one name in this group!')
-        
+
         # Count the number of elements in this group
         groupLen = len(group)
-        
+
         # Add the "Target" column to the fileIndex
         thisTarget = input('\nEnter the target for group "{0}": '.format(thisName))
         thisTarget = [thisTarget]*groupLen
-        
+
         # Ask the user to supply the dither pattern for this group
         thisDitherEntered = False
         while not thisDitherEntered:
             # Have the user select option 1 or 2
             print('\nEnter the dither patttern for group "{0}": '.format(thisName))
-            thisDither = input('[1: ABBA, 2: HEX]')                
-            
+            thisDither = input('[1: ABBA, 2: HEX]')
+
             # Test if the numbers 1 or 2 were entered
             try:
                 thisDither = np.int(thisDither)
@@ -140,16 +140,16 @@ if not os.path.isfile(indexFile):
                     # If so, then reassign as a string
                     thisDither = ['ABBA', 'HEX'][(thisDither-1)]
                     thisDitherEntered = True
-            except: 
+            except:
                 print('Response not recognized')
-        
+
         # Create a list of "thisDither" entries
         thisDither = [thisDither]*groupLen
-        
+
         # Add these elements to the target list
         targetList.extend(thisTarget)
         ditherList.extend(thisDither)
-    
+
     pdb.set_trace()
     # Add the "Target" and "Dither columns"
     groupFileIndex.add_column(Column(name='Target',
@@ -158,11 +158,11 @@ if not os.path.isfile(indexFile):
     groupFileIndex.add_column(Column(name='Dither',
                                 data=np.array(ditherList)),
                                 index = 7)
-    
+
     # Re-sort by file-number
     fileSortInds = np.argsort(groupFileIndex['Filename'])
     fileIndex1   = groupFileIndex[fileSortInds]
-    
+
     # Write file to disk
     fileIndex1.write(indexFile, format='csv')
 else:
