@@ -13,6 +13,8 @@ astropy, and matplotlib preinstalled. If you elect not to use Anaconda, then
 make sure to get those packages properly installed before proceeding to install
 the AstroImage dependencies.
 
+This package is written for Python 3 and is not compatible with Python 2.
+
 # Procedure
 
 The pyPol package consists of a set of scripts, each of which perform one of the
@@ -56,11 +58,35 @@ open office, etc...).
 
 The indexing script also adds a "Use" flag column to the index. Files with a 1
 in this column will be used in the final polarimetry analysis while files with a
-0 in this column will be omitted.
+0 in this column will be omitted from later processing steps.
 
 ## 02_doAstrometry.py
 
+This step can be optional depending on how you want to align your images in step
+05_avgPolAngImages and beyond. If you are planning on using astrometry, then
+you'll need to install Astrometry.net on your system. If you are using Linux,
+then the Astrometry.net website is probably enough to get going. If you need a
+bit more help, or if you're installing Astrometry.net on Windows, then I
+recommend you check out the [setup
+guide](https://sites.google.com/site/jmastronomy/Software/astrometry-net-setup)
+I wrote expressly for that purpose.
+
+Once you've successfully installed Astrometry.net, this step is quite
+straightforward. Simply update the paths at the beginning of the script, and
+execute it with Python. This should loop through all the files in your
+reducedDir location and solve their astrometry (updating file headers along the
+way).
+
 ## 03_repairAstrometry.py
+
+Of course, it would be wonderful if all the files had perfect astrometry right
+out of the gate, but that's not always the case. To check the self-consistency
+of the solved astrometry, this script produces a histogram of the plate-scale
+values for each science target and each waveband (e.g. NGC7023, R-band). Any
+outliers in the histogram are identified and their astrometry information is
+replaced with a substitute set of values from the other images in that group.
+
+To execute this script, simply update the paths at the top of the file, and run it through the Python interpreter.
 
 ## 04_buildMasks.py
 

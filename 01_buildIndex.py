@@ -19,7 +19,7 @@ from scipy import stats
 
 # Add the AstroImage class
 sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage, Bias, Dark, Flat
+from AstroImage import AstroImage
 
 ################################################################################
 # Define a recursive file search which takes a parent directory and returns all
