@@ -6,9 +6,11 @@ Created on Tue Nov 10 15:56:02 2015
 """
 
 import os
+import sys
+import subprocess
 import numpy as np
-from astropy.io import ascii
-from astropy.table import Column as Column
+from astropy.table import Table
+from astropy.table import Column
 import astropy.coordinates as coord
 import astropy.units as u
 from astropy.wcs import WCS
@@ -40,20 +42,44 @@ pyBDP_reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
 fileIndex = Table.read(indexFile, format='csv')
 
+# Determine what kind of system is being run,
+# and define command types accordingly
+if 'win' in sys.platform:
+    delCmd = 'del '
+    shllCmd = True
+else:
+    delCmd = 'rm '
+    shellCmd = False
+
 # Setup new directory for plate scale histograms data
 delim         = os.path.sep
 astroCheckDir = os.path.join(pyPol_data, 'astrometryCheck')
 if (not os.path.isdir(astroCheckDir)):
     os.mkdir(astroCheckDir, 0o755)
 
+# Loop through the faliedAstroFile,
+# and build a list of files previously identified as "failed"
 failedAstroFile = os.path.join(astroCheckDir, 'failedAstro.dat')
+if os.path.isfile(failedAstroFile):
+    # If the file exists, then process the text
+    failedHandle = open(failedAstroFile, 'r')
+    failedList   = list(failedHandle)
+    failedHandle.close()
+
+    # Loop through the lines of the file and strip trailing line-breaks
+    for i in range(len(failedList)):
+        failedList[i] = (failedList[i]).strip()
+else:
+    # If the file does not exist,
+    # then initalize an empty list to store new failed files
+    failedList = []
 
 # Determine which parts of the Fileindex pertain to science images
 keepFiles = (fileIndex['Use'] == 1)
 
-# Update the fileIndex with the paths to reduced files
-fileIndex = fileIndex[np.where(keepFiles)]
-fileIndex['Filename'] = fileList
+# # Update the fileIndex with the paths to reduced files
+# fileIndex = fileIndex[np.where(keepFiles)]
+# fileIndex['Filename'] = fileList
 
 # Group the fileIndex by...
 # 1. Target
@@ -75,6 +101,14 @@ for group in fileIndexByTarget.groups:
     print('\tDither        : {0}'.format(thisDither))
     print('\tBinning       : {0}'.format(thisBinning))
 
+    # Construct the name of the histogram to be produced for this group
+    histName = os.path.join(astroCheckDir,
+               ('_'.join([thisTarget, thisWaveband, thisBinning]) + '.png'))
+
+    # Test if the histogram is already written,
+    # and skip these groups.
+    if os.path.isfile(histName): continue
+
     # Get plate scales for all the images of this target.
     # Load the plate scales into a list
     targetBinningList    = []
@@ -82,9 +116,9 @@ for group in fileIndexByTarget.groups:
     targetPlateScaleList = []
 
     # Loop through the files
-    for file in group['Filename']:
+    for file1 in group['Filename']:
         # Load the image header
-        tmpImage  = Image(file)
+        tmpImage  = AstroImage(file1)
         tmpHeader = tmpImage.header
 
         # Grab the WCS
@@ -105,6 +139,7 @@ for group in fileIndexByTarget.groups:
     badAstroBool = np.logical_or((deviation[:,0] > 0.05),
                                  (deviation[:,1] > 0.05))
     badAstroInds = np.where(badAstroBool)[0]
+
     # If there were bad astrometries, then record them
     if len(badAstroInds) > 0:
         # Determine the good astrometry values
@@ -113,14 +148,14 @@ for group in fileIndexByTarget.groups:
         goodAstroVals = np.mean(goodAstroVals, axis=0)
 
         # Read in a good image to get a good WCS
-        goodImg = Image(group['Filename'][goodAstroInds[0]])
+        goodImg = AstroImage(group['Filename'][goodAstroInds[0]])
         goodWCS = WCS(goodImg.header)
 
         # Loop through all the bad files and "fix them"
         for badInd in badAstroInds:
             # Build a quick header from the WCS object
             thisFile = group['Filename'][badInd]
-            thisImg  = Image(thisFile)
+            thisImg  = AstroImage(thisFile)
 
             # Grab the approximate pointing from the header
             thisRA  = coord.Angle(thisImg.header['TELRA'], unit=u.hour)
@@ -156,9 +191,12 @@ for group in fileIndexByTarget.groups:
 
             thisFile = os.path.basename(group['Filename'][badInd])
             print('Logging bad file: ' + thisFile)
-            os.system('echo "' + thisFile +
-                      '" >> ' + failedAstroFile)
-
+            if thisFile in failedList:
+                pass
+            else:
+                failedList.append(thisFile)
+    else:
+        print('\tNo bad files in this group')
     # Prep for histogram plotting
     minPS    = np.min(targetPlateScales)
     maxPS    = np.max(targetPlateScales)
@@ -171,7 +209,12 @@ for group in fileIndexByTarget.groups:
     n2, bins2, patches2 = plt.hist(targetPlateScales[:,1], binEdges, histtype='stepfilled',
                                 rwidth=1, facecolor='blue', alpha=0.4)
 
-    filename = (astroCheckDir + delim +
-                '_'.join([thisTarget, thisWaveband, thisBinning]) + '.png')
-    plt.savefig(filename)
+    plt.savefig(histName)
     plt.clf()
+
+# Now that all the files have been processed,
+# Save the list of failed files
+failedHandle = open(failedAstroFile, 'w')
+failedStr    = ('\n').join(failedList)
+failedHandle.write(failedStr)
+failedHandle.close()
