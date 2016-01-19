@@ -127,6 +127,40 @@ script.
 
 ## 05_avgPolAngImages.py
 
+This script simply loops through each target at each waveband and polaroid
+filter rotation angle and computes an average image for each of these. To run
+this script, simply update the directory information at the top of the script,
+and run it through a python interpreter.
+
+The following procedure is used to compute the average images.
+
+1. The off (B) positions from the ABBA dither observational procedure are used
+to generate a smoothed average background image. The smoothing process uses a
+non-normalized Gaussian shaped kernel, so if you see warnings stating
+
+```
+WARNING: The kernel is not normalized. [photutils.utils.convolution]
+```
+
+those can be safely ignored.
+
+2. The smoothed background images are subtracted from the on (A) positions.
+
+3. The background subtracted on-target (A position) images are aligned with each
+other.  By default, the astrometry from 02_doAstrometry is used. However, it is
+possible to use a cross-correlation process to align the images before
+averaging. The cross-correlation process would run *much* slower.
+
+4. The aligned images are averaged (rejecting outliers along the way) to produce
+a single output image for each waveband/polaroid-angle pair.
+
+5. The astrometry of the averaged image is solved using Astrometry.net and saved
+to disk. See my instructions for [Windows
+Setup](https://sites.google.com/site/jmastronomy/Software/astrometry-net-setup)
+to get the Astrometry.net solver running on your computer. A similar procedure
+can be followed with much less effort in Linux. Simply install the pre-requisite
+packages using `apt-get` or `yum` instead of Cygwin-setup.
+
 ## 06_finalPolarimetry.py
 
 ## 07_photometricCalibration
