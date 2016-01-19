@@ -34,11 +34,6 @@ pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
 # This is the location of the previously generated masks (step 4)
 maskDir = os.path.join(pyPol_data, 'Masks')
 
-# Read in the indexFile data and select the filenames
-print('\nReading file index from disk')
-indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
-fileIndex = Table.read(indexFile, format='csv')
-
 # Setup new directory for polarimetry data
 polarimetryDir = os.path.join(pyPol_data, 'Polarimetry')
 if (not os.path.isdir(polarimetryDir)):
@@ -48,14 +43,16 @@ polAngDir = os.path.join(polarimetryDir, 'polAngImgs')
 if (not os.path.isdir(polAngDir)):
     os.mkdir(polAngDir, 0o755)
 
+# Read in the indexFile data and select the filenames
+print('\nReading file index from disk')
+indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
+fileIndex = Table.read(indexFile, format='csv')
+
 # Determine which parts of the fileIndex pertain to science images
 useFiles = np.logical_and((fileIndex['Use'] == 1), (fileIndex['Dither'] == 'ABBA'))
 
 # Cull the file index to only include files selected for use
 fileIndex = fileIndex[np.where(useFiles)]
-
-# Predefine the ABBA pattern
-ABBA = 'ABBA'
 
 # Group the fileIndex by...
 # 1. Target
