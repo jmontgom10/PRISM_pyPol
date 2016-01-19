@@ -9,7 +9,6 @@ import sys
 import numpy as np
 from astropy.table import Table
 from astropy.table import Column as Column
-from astropy.io import ascii
 import pdb
 
 # Add the AstroImage class

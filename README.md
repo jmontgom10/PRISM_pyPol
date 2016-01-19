@@ -90,6 +90,41 @@ To execute this script, simply update the paths at the top of the file, and run 
 
 ## 04_buildMasks.py
 
+This script allows the user to manually generate masks for each science image.
+The reflection nebula project for which the pyPol scripts were originally
+developed included several targets with immensely bright stars at their center.
+These bright stars produced optical ghosts on the images, and those ghosts
+needed to be masked in order to accurately asses the polarization across the
+nebula. If for whatever reason you also need to mask certain portions of the
+your science images, then you can make those masks with this script.
+
+This script requires the usual updating of the directories and filenames at the
+top of the code, but it also requires the user to supply a list of targets for
+which to build masks. Any images with a target value matching an entry in the
+`targets` variable will be processed for mask building.
+
+When the script is launched, a three pane plot of the science images will be
+displayed. The center pane in this triptych is the active pane for which you are
+build a mask. I have provided the following look-up table for managing the
+mask-building process.
+
+| Event       | Effect                                                         |
+|-------------|----------------------------------------------------------------|
+|Left Click   | Apply a circular aperture mask to the clicked region           |
+|Right Click  | Delete a circular aperture mask from the clicked region        |
+| 1 - 6       | Set the size of the circular aperture                          |
+| Enter       | Save the current mask for the center pane to disk              |
+| Backspace   | Reset the current mask to a blank slate                        |
+| Left/Right  | Change the active pane to the previous/next image              |
+
+To build a mask, simply click on the regions of the active pane which need to be
+masked. The mask will be displayed in the center pane as a transparent white
+outline. You can delete regions of the mask with right clicks. Once you are
+satisfied with the mask you've build, you can save it to disk with a single
+stroke of the Enter key. Press the left or right arrow keys to scroll through
+the images for the specified target(s), and simply close the GUI plot to end the
+script.
+
 ## 05_avgPolAngImages.py
 
 ## 06_finalPolarimetry.py
