@@ -8,12 +8,10 @@ Created on Wed Jan 20 15:59:25 2015
 import os
 import sys
 import numpy as np
-from astropy.io import ascii
+from astropy.wcs import WCS
 from astropy.table import Table as Table
-from astropy.table import Column as Column
-from astropy.convolution import Gaussian2DKernel
-from astropy.stats import gaussian_fwhm_to_sigma
-from photutils import detect_sources, Background
+import astropy.units as u
+from astropy.coordinates import SkyCoord
 import pdb
 
 # Add the AstroImage class
@@ -62,6 +60,11 @@ print('Reading polarization standards from disk')
 polStandardFile = os.path.join('polStandards.csv')
 polStandards = Table.read(polStandardFile, format='csv')
 
+ra1      = polStandards['RA'].data
+dec1     = polStandards['Dec'].data
+polStanCoords = SkyCoord(ra = ra1, dec = dec1,
+    unit = (u.hour, u.deg), frame = 'fk5')
+
 # Determine which parts of the fileIndex pertain to science images
 useFiles = np.logical_and(fileIndex['Use'] == 1,
                           fileIndex['Dither'] == 'HEX')
@@ -80,28 +83,59 @@ fileIndex = fileIndex[np.where(np.logical_and(useFiles, targetFiles))]
 # 2. Waveband
 # 3. Dither (pattern)
 # 4. Polaroid Angle
-fileIndexByTarget = fileIndex.group_by(['Target', 'Night', 'Waveband', 'Dither', 'Polaroid Angle'])
+fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither'])
 
-
-for group in fileIndexByTarget.groups:
+polStandardBool = [True]*len(polStandards)
+for targetWave in fileIndexByTarget.groups:
     # Grab the current target information
-    thisTarget   = str(np.unique(group['Target'].data)[0])
-    thisNight    = str(np.unique(group['Night'].data)[0])
-    thisWaveband = str(np.unique(group['Waveband'].data)[0])
-    thisPolAng   = str(np.unique(group['Polaroid Angle'].data)[0])
-
-    print('\nProcessing image for')
+    thisTarget   = str(np.unique(targetWave['Target'].data)[0])
+    thisWaveband = str(np.unique(targetWave['Waveband'].data)[0])
+    print('\nProcessing images for')
     print('\tTarget         : {0}'.format(thisTarget))
-    print('\tNight          : {0}'.format(thisNight))
     print('\tWaveband       : {0}'.format(thisWaveband))
-    print('\tPolaroid Angle : {0}'.format(thisPolAng))
 
-    inFile = os.path.join(polAngDir,
-        '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits')
+    # Initalize an empty dictionary for storing polAng images
+    polAngImgs = dict()
+    targetWaveByPolAng = targetWave.group_by(['Polaroid Angle'])
+    for polAng in targetWaveByPolAng.groups:
+        # Loop through each of the polAng images,
+        # and check which polarization standards are common to them all
+        thisPolAng = str(np.unique(polAng['Polaroid Angle'].data)[0])
+        print('\t\tPolaroid Angle : {0}'.format(thisPolAng))
 
-    print('\nComputing calibration photometry')
-    thisImg = AstroImage(inFile)
+        # Read in the current polAng image
+        inFile = os.path.join(polAngDir,
+            '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits')
 
-    pdb.set_trace()
+        # Read the file and store it in the dictionary
+        thisImg = AstroImage(inFile)
+        polAngImgs[int(thisPolAng)] = thisImg
+
+        # Determine which standards appear in this image
+        polStandardBool = np.logical_and(polStandardBool,
+            thisImg.in_image(polStanCoords, edge=50))
+
+    # Select the standards for this targetWave group
+    thisStandard = polStandards[np.where(polStandardBool)]
+    thisCoords   = polStanCoords[np.where(polStandardBool)]
+    photoDict    = dict(zip(thisStandard['Name'],
+                            range(len(thisCoords))))
+
+    # Loop back through the polAngImgs,
+    # and compute the photometry of the standards for each image
+    for polAng, img in polAngImgs.items():
+        # Grab the WCS for this image
+        thisWCS = WCS(img.header)
+
+        # Grab the pixel coordinates for the standard(s)
+        xyPix = thisCoords.to_pixel(thisWCS)
+
+        # Create apertures at those positions
+
+        # Perform aperture photometry at those positions
+
+        # Save photometry in dictionary
+        pdb.set_trace()
+
 
 print('Done with this script!')
