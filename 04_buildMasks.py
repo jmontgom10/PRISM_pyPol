@@ -24,17 +24,17 @@ pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data'
 # This is the location where all pyPol data will be saved
 pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
 
+# The user can speed up the process by defining the "Target" values from
+# the fileIndex to be considered for masking.
+# Masks can onlybe produced for targets in this list.
+targets = ['NGC2023', 'NGC7023', 'NGC1977', 'M78']
+
 # This is the location of the pyBDP processed Data
 pyBDP_reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
 
 # Read in the indexFile data and select the filenames
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
 fileIndex = Table.read(indexFile, format='csv')
-
-# The user can speed up the process by defining the "Target" values from
-# the fileIndex to be considered for masking.
-# Masks can onlybe produced for targets in this list.
-targets = ['NGC2023', 'NGC7023', 'NGC1977', 'M78']
 
 # Setup new directory for polarimetry data
 maskDir = os.path.join(pyPol_data, 'Masks')

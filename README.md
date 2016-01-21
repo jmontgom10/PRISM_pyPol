@@ -13,7 +13,16 @@ astropy, and matplotlib preinstalled. If you elect not to use Anaconda, then
 make sure to get those packages properly installed before proceeding to install
 the AstroImage dependencies.
 
-This package is written for Python 3 and is not compatible with Python 2.
+You will also need to install the `photutils` package for Python. This can be
+done via anaconda
+
+`conda install --channel https://conda.anaconda.org/astropy photutils`
+
+or pip (if you did not elect to install Anaconda)
+
+`pip install --no-deps photutils`
+
+This script package is written for Python 3 and is not compatible with Python 2.
 
 # Procedure
 
@@ -58,7 +67,18 @@ open office, etc...).
 
 The indexing script also adds a "Use" flag column to the index. Files with a 1
 in this column will be used in the final polarimetry analysis while files with a
-0 in this column will be omitted from later processing steps.
+0 in this column will be omitted from later processing steps. This provides a
+simple way to prevent any bad data from being included in the final polarization
+estimates.
+
+### Target Names for Calibration Data
+
+I recommend treating calibration observations from separate nights
+independently. The easiest way to handle this is to append the data to the
+Target name for calibration images. Thus `Orion_Cal` targets from different
+nights become `Orion_Cal_20150117` and `Orion_Cal_20150119`, etc... The
+target-parser in the 05_avgPolAngImages.py will then know to treat these
+separately when computing average images.
 
 ## 02_doAstrometry.py
 

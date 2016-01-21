@@ -49,10 +49,10 @@ indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
 fileIndex = Table.read(indexFile, format='csv')
 
 # Determine which parts of the fileIndex pertain to science images
-useFiles = np.logical_and((fileIndex['Use'] == 1), (fileIndex['Dither'] == 'ABBA'))
+useFiles = np.where(fileIndex['Use'] == 1)
 
 # Cull the file index to only include files selected for use
-fileIndex = fileIndex[np.where(useFiles)]
+fileIndex = fileIndex[useFiles]
 
 # Group the fileIndex by...
 # 1. Target
@@ -105,7 +105,6 @@ for group in fileIndexByTarget.groups:
 
             # Mask the image by setting masked values to "np.NaN"
             tmpImg.arr[np.where(tmpMask.arr == 1)] = np.NaN
-#            tmpImg.arr = np.ma.array(tmpImg.arr, mask=tmpMask.arr, copy=True)
 
         # Grab the polaroid angle position from the header
         polPos = str(tmpImg.header['POLPOS'])
@@ -118,6 +117,7 @@ for group in fileIndexByTarget.groups:
         # If everything seems ok, then add this to the imgList
         imgList.append(tmpImg)
 
+    # Cleanup temporary variables
     del tmpImg
 
     # Process images in this group according to dither type
@@ -180,37 +180,52 @@ for group in fileIndexByTarget.groups:
             avgImg.header = sciImgList[0].header
             avgImg.arr    = AstroImage.stacked_average(sciImgList)
 
-            # Clear out the old astrometry
-            del avgImg.header['WCSAXES']
-            del avgImg.header['PC*']
-            del avgImg.header['CDELT*']
-            del avgImg.header['CUNIT*']
-            del avgImg.header['*POLE']
-            avgImg.header['CRPIX*'] = 1.0
-            avgImg.header['CRVAL*'] = 1.0
-            avgImg.header['CTYPE*'] = 'Linear Binned ADC Pixels'
-            avgImg.header['NAXIS1'] = avgImg.arr.shape[1]
-            avgImg.header['NAXIS2'] = avgImg.arr.shape[0]
-
-            # I can only "redo the astrometry" if the file is written to disk
-            avgImg.filename = 'tmp.fits'
-            avgImg.write()
-
-            # Solve the stacked image astrometry
-            success  = avgImg.astrometry()
-
-            # Clean up temporary files
-            if os.path.isfile('none'):
-                os.system('rm none')
-            if os.path.isfile('tmp.fits'):
-                os.system('rm tmp.fits')
-
-            # With successful astrometry, save result to disk
-            if success:
-                print('astrometry succeded')
-                avgImg.write(outFile)
-            else:
-                print('astrometry failed?!')
-                pdb.set_trace()
     else:
-        print('Hex-dither support not yet enabled')
+        # Handle HEX-DITHERS images
+        # (mostly for calibration images as of now)
+
+        # Test if numImgs matches the ABBA pattern
+        if (numImgs % 6) != 0:
+            print('The HEX dither pattern is not there...')
+            pdb.set_trace()
+
+        # Now align and combine these images into a single average image
+        imgList       = AstroImage.align_stack(imgList, padding=np.NaN)
+        avgImg        = AstroImage()
+        avgImg.header = imgList[0].header
+        avgImg.arr    = AstroImage.stacked_average(imgList)
+
+    # Now that an average image has been computed (for either dither pattern),
+    # let's completely re-solve the astrometry of the newly created image.
+    # Clear out the old astrometry
+    del avgImg.header['WCSAXES']
+    del avgImg.header['PC*']
+    del avgImg.header['CDELT*']
+    del avgImg.header['CUNIT*']
+    del avgImg.header['*POLE']
+    avgImg.header['CRPIX*'] = 1.0
+    avgImg.header['CRVAL*'] = 1.0
+    avgImg.header['CTYPE*'] = 'Linear Binned ADC Pixels'
+    avgImg.header['NAXIS1'] = avgImg.arr.shape[1]
+    avgImg.header['NAXIS2'] = avgImg.arr.shape[0]
+
+    # I can only "redo the astrometry" if the file is written to disk
+    avgImg.filename = 'tmp.fits'
+    avgImg.write()
+
+    # Solve the stacked image astrometry
+    success  = avgImg.astrometry()
+
+    # Clean up temporary files
+    if os.path.isfile('none'):
+        os.system('rm none')
+    if os.path.isfile('tmp.fits'):
+        os.system('rm tmp.fits')
+
+    # With successful astrometry, save result to disk
+    if success:
+        print('astrometry succeded')
+        avgImg.write(outFile)
+    else:
+        print('astrometry failed?!')
+        pdb.set_trace()
