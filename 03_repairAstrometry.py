@@ -52,7 +52,6 @@ else:
     shellCmd = False
 
 # Setup new directory for plate scale histograms data
-delim         = os.path.sep
 astroCheckDir = os.path.join(pyPol_data, 'astrometryCheck')
 if (not os.path.isdir(astroCheckDir)):
     os.mkdir(astroCheckDir, 0o755)

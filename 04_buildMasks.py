@@ -36,9 +36,6 @@ fileIndex = Table.read(indexFile, format='csv')
 # Masks can onlybe produced for targets in this list.
 targets = ['NGC2023', 'NGC7023', 'NGC1977', 'M78']
 
-#Setup the path delimeter for this operating system
-delim = os.path.sep
-
 # Setup new directory for polarimetry data
 maskDir = os.path.join(pyPol_data, 'Masks')
 if (not os.path.isdir(maskDir)):

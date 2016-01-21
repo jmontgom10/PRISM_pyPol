@@ -161,6 +161,26 @@ to get the Astrometry.net solver running on your computer. A similar procedure
 can be followed with much less effort in Linux. Simply install the pre-requisite
 packages using `apt-get` or `yum` instead of Cygwin-setup.
 
+## 06_polarizationCalibration.py
+
+This script computes the polarization position angle offsets to be applied to
+correct the polaroid-rotation-angle reference frame to equatorial coordinates.
+It will also compute a single polarization efficiency to be used to correct the
+computed polarization percentage maps.
+
+This procedure requires the observation of polarization standard stars and their
+standard polarization percentages and polarization position-angles. This
+information must be supplied by the user, using the 'Target' value supplied for
+these observations in the 01_buildIndex script.
+
 ## 06_finalPolarimetry.py
+
+This script uses a cross-correlation method to align the averaged
+polaroid-rotation-angle images for each target and waveband, then it performs
+the necessary subtraction and division methods to compute polarization
+percentage and polarization position angle maps for the extended emission in
+each image.
+
+TODO This script should
 
 ## 07_photometricCalibration

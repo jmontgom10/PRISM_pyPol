@@ -88,11 +88,11 @@ print('\nCategorizing files by groups.\n')
 startTime = time.time()
 
 # Begin by initalizing some arrays to store the image classifications
-obsType  = []
 name     = []
-binType  = []
-polAng   = []
 waveBand = []
+polAng   = []
+binType  = []
+night    = []
 fileCounter = 0
 percentage  = 0
 
@@ -114,6 +114,11 @@ for file in fileList:
     if binTest[0] == binTest[1]:
         binType.append(int(binTest[0]))
 
+    # Grab the night of this observation
+    tmpNight = (tmpImg.header['DATE-OBS'])[0:10]
+    tmpNight = tmpNight.translate({ord(i):None for i in '-'})
+    night.append(tmpNight)
+
     # Count the files completed and print update progress message
     fileCounter += 1
     percentage1  = np.floor(fileCounter/len(fileList)*100)
@@ -127,8 +132,8 @@ print(('\n{0} File processing completed in {1:g} seconds'.
        format(numFiles, (endTime -startTime))))
 
 # Write the file index to disk
-fileIndex = Table([fileList, name, waveBand, polAng, binType],
-                  names = ['Filename', 'Name', 'Waveband', 'Polaroid Angle', 'Binning'])
+fileIndex = Table([fileList, name, waveBand, polAng, binType, night],
+                  names = ['Filename', 'Name', 'Waveband', 'Polaroid Angle', 'Binning', 'Night'])
 fileIndex.add_column(Column(name='Use',
                             data=np.ones((numFiles)),
                             dtype=np.int),
@@ -185,7 +190,6 @@ for group in groupFileIndex.groups:
     targetList.extend(thisTarget)
     ditherList.extend(thisDither)
 
-pdb.set_trace()
 # Add the "Target" and "Dither columns"
 groupFileIndex.add_column(Column(name='Target',
                             data=np.array(targetList)),
