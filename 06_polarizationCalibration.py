@@ -690,11 +690,11 @@ data = RealData(P0, P1, sx=sP0, sy=sP1)
 odr = ODR(data, PEmodel, beta0=[-1.])
 
 # Run the regression.
-out = odr.run()
+PEout = odr.run()
 
 # Use the in-built pprint method to give us results.
 print('R-band delta PE fitting results')
-out.pprint()
+PEout.pprint()
 
 # Plot up the results
 # PA measured vs. PA true
@@ -703,7 +703,7 @@ fig.delaxes(ax)
 ax = fig.add_subplot(1,1,1)
 ax.errorbar(P0, P1, xerr=sP0, yerr=sP1,
     ecolor='b', linestyle='None', marker=None)
-ax.plot([0,max(P0)], PE(out.beta[0], np.array([0,max(P0)])), 'g')
+ax.plot([0,max(P0)], PE(PEout.beta[0], np.array([0,max(P0)])), 'g')
 plt.xlabel('Cataloged P [%]')
 plt.ylabel('Measured P [%]')
 xlim = ax.get_xlim()
@@ -769,11 +769,11 @@ data = RealData(PA0, PA1, sx=sPA0, sy=sPA1)
 odr = ODR(data, deltaPAmodel, beta0=[-1., 90.0], ifixb=[0,1])
 
 # Run the regression.
-out = odr.run()
+dPAout = odr.run()
 
 # Use the in-built pprint method to give us results.
 print('R-band delta PA fitting results')
-out.pprint()
+dPAout.pprint()
 
 # Store the final calibration data in the calTable variable
 calTable.add_row(['R', PEout.beta[0], PEout.sd_beta[0],
@@ -786,7 +786,7 @@ fig.delaxes(ax)
 ax = fig.add_subplot(1,1,1)
 ax.errorbar(PA0, PA1, xerr=sPA0, yerr=sPA1,
     ecolor='b', linestyle='None', marker=None)
-ax.plot([0,max(PA0)], deltaPA(out.beta, np.array([0,max(PA0)])), 'g')
+ax.plot([0,max(PA0)], deltaPA(dPAout.beta, np.array([0,max(PA0)])), 'g')
 plt.xlabel('Cataloged PA [deg]')
 plt.ylabel('Measured PA [deg]')
 xlim = ax.get_xlim()
