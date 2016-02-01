@@ -60,14 +60,6 @@ fileIndex = fileIndex[useFiles]
 # 3. Dither (pattern)
 # 4. Polaroid Angle
 fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither', 'Polaroid Angle'])
-#fileIndexByTarget = fileIndex.group_by(['Polaroid Angle', 'Target'])
-
-# for group in fileIndexByTarget.groups:
-#     thisTarget   = str(np.unique(group['Target'].data)[0])
-#     thisWaveband = str(np.unique(group['Waveband'].data)[0])
-#     thisPolAng   = str(np.unique(group['Polaroid Angle'].data)[0])
-#     if thisTarget == 'NGC2023' and thisWaveband == 'V':
-#         pdb.set_trace()
 
 # Loop through each group
 groupKeys = fileIndexByTarget.groups.keys
@@ -144,7 +136,11 @@ for group in fileIndexByTarget.groups:
 
             # Loop through each pair and bild a bg-subtracted list
             sciImgList = []
-            for Aimg, Bimg in zip(Aimgs, Bimgs):
+            for pairNum, ABimg in enumerate(zip(Aimgs, Bimgs)):
+                Aimg = ABimg[0]
+                Bimg = ABimg[1]
+                print('\t\tProcessing on-off pair {0}'.format(pairNum+1))
+
                 # Estimate the background for this pair
                 B1bkg     = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
                                        method='median')
@@ -155,7 +151,6 @@ for group in fileIndexByTarget.groups:
                 kernel = Gaussian2DKernel(sigma, x_size=6, y_size=6)
                 segm   = detect_sources(Bimg.arr, threshold,
                                       npixels=5, filter_kernel=kernel)
-
                 # Build the actual mask and include a step to capture negative
                 # saturation values
                 mask   = np.logical_or((segm.data > 0),
@@ -166,6 +161,10 @@ for group in fileIndexByTarget.groups:
                 B1bkg = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
                                        method='median', mask=mask)
 
+                # Catch any saturated values and "mask" them with NaNs
+                badInds = np.where(Aimg.arr <= 0)
+                Aimg.arr[badInds] = np.NaN
+
                 # Perform the actual background subtraction
                 Aimg.arr  = Aimg.arr - B1bkg.background
 
@@ -175,10 +174,8 @@ for group in fileIndexByTarget.groups:
             # Now that all the backgrounds have been subtracted,
             # let's align the images and compute an average image
             # TODO Should I use "cross-correlation" alignment?
-            sciImgList    = AstroImage.align_stack(sciImgList, padding=np.NaN)
-            avgImg        = AstroImage()
-            avgImg.header = sciImgList[0].header
-            avgImg.arr    = AstroImage.stacked_average(sciImgList)
+            sciImgList = AstroImage.align_stack(sciImgList, padding=np.NaN)
+            avgImg     = AstroImage.stacked_average(sciImgList)
 
     else:
         # Handle HEX-DITHERS images
@@ -190,24 +187,8 @@ for group in fileIndexByTarget.groups:
             pdb.set_trace()
 
         # Now align and combine these images into a single average image
-        imgList       = AstroImage.align_stack(imgList, padding=np.NaN)
-        avgImg        = AstroImage()
-        avgImg.header = imgList[0].header
-        avgImg.arr    = AstroImage.stacked_average(imgList)
-
-    # Now that an average image has been computed (for either dither pattern),
-    # let's completely re-solve the astrometry of the newly created image.
-    # Clear out the old astrometry
-    del avgImg.header['WCSAXES']
-    del avgImg.header['PC*']
-    del avgImg.header['CDELT*']
-    del avgImg.header['CUNIT*']
-    del avgImg.header['*POLE']
-    avgImg.header['CRPIX*'] = 1.0
-    avgImg.header['CRVAL*'] = 1.0
-    avgImg.header['CTYPE*'] = 'Linear Binned ADC Pixels'
-    avgImg.header['NAXIS1'] = avgImg.arr.shape[1]
-    avgImg.header['NAXIS2'] = avgImg.arr.shape[0]
+        imgList = AstroImage.align_stack(imgList, padding=np.NaN)
+        avgImg  = AstroImage.stacked_average(imgList)
 
     # I can only "redo the astrometry" if the file is written to disk
     avgImg.filename = 'tmp.fits'
@@ -217,6 +198,9 @@ for group in fileIndexByTarget.groups:
     success  = avgImg.astrometry()
 
     # Clean up temporary files
+    # TODO update to by system independent
+    # (use subprocess module and "del" command for Windows)
+    # See AstroImage.astrometry for example
     if os.path.isfile('none'):
         os.system('rm none')
     if os.path.isfile('tmp.fits'):
@@ -229,3 +213,5 @@ for group in fileIndexByTarget.groups:
     else:
         print('astrometry failed?!')
         pdb.set_trace()
+
+print('\nDone computing average images!')
