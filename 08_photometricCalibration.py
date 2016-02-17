@@ -5,7 +5,6 @@ Created on Sat Nov 28 17:08:13 2015
 @author: jordan
 """
 import os
-import copy
 import numpy as np
 from astropy.table import Table, hstack
 from astropy.stats import sigma_clipped_stats

@@ -34,6 +34,12 @@ from AstroImage import AstroImage
 # this is where the user specifies where the raw data is stored
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
+# Define how the font will appear in the plots
+font = {'family': 'sans-serif',
+        'color':  'black',
+        'weight': 'normal',
+        'size': 14L369
+        }
 
 # This is the location where all pyPol data will be saved
 pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
@@ -366,7 +372,6 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
                     U = A/B
                     sigU = np.abs(U*sigAandB*np.sqrt(A**(-2) + B**(-2)))
 
-
                     # then compute Q and its uncertainty
                     A = I000[star] - I400[star]
                     B = I000[star] + I400[star]
@@ -395,7 +400,10 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
                     # sigPA = 0.5*rad2deg*(sigP/P)
 
                     # Real way (uses actual sigQ and sigU)
-                    sigPA = 0.5*rad2deg*np.sqrt((U*sigQ)**2 + (Q*sigU)**2)/P
+                    sigPA = 0.5*rad2deg*np.sqrt((U*sigQ)**2 + (Q*sigU)**2)/P**2
+                    # TODO Double check that this matches the formula in PEGS_pol
+                    # I think that PEGS pol is actually MISSING a factor of P
+                    # in the denominator.
 
                     # Check that the polarization is reasonable
                     # (e.g. R-band, 20150119, HD38563A is problematic)
@@ -441,8 +449,8 @@ else:
     polStandardTable_R = Table.read(RtableFile, format='csv')
 
 # Build a quick Table to store the calibration results
-calTable = Table(names=('Waveband', 'PE', 's_PE', 'dPA', 's_dPA'),
-                 dtype=('S1', 'f8', 'f8', 'f8', 'f8'))
+calTable = Table(names=('Waveband', 'PE', 's_PE', 'PAsign', 'dPA', 's_dPA'),
+                 dtype=('S1', 'f8', 'f8', 'f8', 'f8', 'f8'))
 
 ###########################################################################
 # Calibrate V-band
@@ -525,7 +533,14 @@ ylim = 0, ylim[1]
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 plt.title('V-band Polarization Efficiency')
-fig.show()
+
+#Compute where the annotation should be placed
+ySpan = np.max(ylim) - np.min(ylim)
+xSpan = np.max(xlim) - np.min(xlim)
+xtxt = 0.1*xSpan + np.min(xlim)
+ytxt = 0.9*ySpan + np.min(ylim)
+plt.text(xtxt, ytxt, 'PE = {0:4.3g} +/- {1:4.3g}'.format(
+    PEout.beta[0], PEout.sd_beta[0]), fontdict=font)
 pdb.set_trace()
 
 ###############
@@ -582,8 +597,13 @@ def deltaPA(B, x):
 deltaPAmodel = Model(deltaPA)
 data = RealData(PA0, PA1, sx=sPA0, sy=sPA1)
 
-# Build the proper fitter class
-odr = ODR(data, deltaPAmodel, beta0=[-1., 90.0], ifixb=[0,1])
+# On first pass, just figure out what the sign is
+odr    = ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
+dPAout = odr.run()
+PAsign = np.round(dPAout.beta[0])
+
+# Build the proper fitter class with the slope fixed
+odr = ODR(data, deltaPAmodel, beta0=[PAsign, 90.0], ifixb=[0,1])
 
 # Run the regression.
 dPAout = odr.run()
@@ -594,23 +614,43 @@ dPAout.pprint()
 
 # Store the final calibration data in the calTable variable
 calTable.add_row(['V', PEout.beta[0], PEout.sd_beta[0],
-                      dPAout.beta[1], dPAout.sd_beta[1]])
+               PAsign, dPAout.beta[1], dPAout.sd_beta[1]])
+
+# Apply the correction terms
+dPAval = dPAout.beta[1]
+PAcor  = ((PAsign*(PA1 - dPAval)) + 720.0) % 180.0
+
+# Do a final regression to plot-test if things are right
+data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
+odr  = ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
+dPAcor = odr.run()
 
 # Plot up the results
 # PA measured vs. PA true
 print('\n\nGenerating PA plot')
 fig.delaxes(ax)
 ax = fig.add_subplot(1,1,1)
-ax.errorbar(PA0, PA1, xerr=sPA0, yerr=sPA1,
+#ax.errorbar(PA0, PA1, xerr=sPA0, yerr=sPA1,
+#    ecolor='b', linestyle='None', marker=None)
+#ax.plot([0,max(PA0)], deltaPA(dPAout.beta, np.array([0,max(PA0)])), 'g')
+ax.errorbar(PA0, PAcor, xerr=sPA0, yerr=sPA1,
     ecolor='b', linestyle='None', marker=None)
-ax.plot([0,max(PA0)], deltaPA(dPAout.beta, np.array([0,max(PA0)])), 'g')
+ax.plot([0,max(PA0)], deltaPA(dPAcor.beta, np.array([0, max(PA0)])), 'g')
 plt.xlabel('Cataloged PA [deg]')
 plt.ylabel('Measured PA [deg]')
 xlim = ax.get_xlim()
+ylim = ax.get_ylim()
 xlim = 0, xlim[1]
 ax.set_xlim(xlim)
 plt.title('V-band PA offset')
-plt.show()
+
+#Compute where the annotation should be placed
+ySpan = np.max(ylim) - np.min(ylim)
+xSpan = np.max(xlim) - np.min(xlim)
+xtxt = 0.1*xSpan + np.min(xlim)
+ytxt = 0.9*ySpan + np.min(ylim)
+plt.text(xtxt, ytxt, 'PA offset = {0:4.3g} +/- {1:4.3g}'.format(
+    dPAout.beta[1], dPAout.sd_beta[1]), fontdict=font)
 pdb.set_trace()
 
 ###########################################################################
@@ -698,7 +738,7 @@ PEout.pprint()
 
 # Plot up the results
 # PA measured vs. PA true
-print('\n\nGenerating PA plot')
+print('\n\nGenerating PE plot')
 fig.delaxes(ax)
 ax = fig.add_subplot(1,1,1)
 ax.errorbar(P0, P1, xerr=sP0, yerr=sP1,
@@ -713,7 +753,14 @@ ylim = 0, ylim[1]
 ax.set_xlim(xlim)
 ax.set_ylim(ylim)
 plt.title('R-band Polarization Efficiency')
-fig.show()
+
+#Compute where the annotation should be placed
+ySpan = np.max(ylim) - np.min(ylim)
+xSpan = np.max(xlim) - np.min(xlim)
+xtxt = 0.1*xSpan + np.min(xlim)
+ytxt = 0.9*ySpan + np.min(ylim)
+plt.text(xtxt, ytxt, 'PE = {0:4.3g} +/- {1:4.3g}'.format(
+    PEout.beta[0], PEout.sd_beta[0]))
 pdb.set_trace()
 
 ###############
@@ -765,8 +812,13 @@ for key in sigKeys:
 # Set up ODR with the model and data.
 data = RealData(PA0, PA1, sx=sPA0, sy=sPA1)
 
-# Build the proper fitter class
-odr = ODR(data, deltaPAmodel, beta0=[-1., 90.0], ifixb=[0,1])
+# On first pass, just figure out what the sign is
+odr    = ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
+dPAout = odr.run()
+PAsign = np.round(dPAout.beta[0])
+
+# Build the proper fitter class with the slope fixed
+odr = ODR(data, deltaPAmodel, beta0=[PAsign, 90.0], ifixb=[0,1])
 
 # Run the regression.
 dPAout = odr.run()
@@ -777,24 +829,47 @@ dPAout.pprint()
 
 # Store the final calibration data in the calTable variable
 calTable.add_row(['R', PEout.beta[0], PEout.sd_beta[0],
-                      dPAout.beta[1], dPAout.sd_beta[1]])
+               PAsign, dPAout.beta[1], dPAout.sd_beta[1]])
+# Apply the correction terms
+dPAval = dPAout.beta[1]
+PAcor  = ((PAsign*(PA1 - dPAval)) + 720.0) % 180.0
+
+# Do a final regression to plot-test if things are right
+data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
+odr  = ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
+dPAcor = odr.run()
+
 
 # Plot up the results
 # PA measured vs. PA true
 print('\n\nGenerating PA plot')
 fig.delaxes(ax)
 ax = fig.add_subplot(1,1,1)
-ax.errorbar(PA0, PA1, xerr=sPA0, yerr=sPA1,
+#ax.errorbar(PA0, PA1, xerr=sPA0, yerr=sPA1,
+#    ecolor='b', linestyle='None', marker=None)
+#ax.plot([0,max(PA0)], deltaPA(dPAout.beta, np.array([0,max(PA0)])), 'g')
+ax.errorbar(PA0, PAcor, xerr=sPA0, yerr=sPA1,
     ecolor='b', linestyle='None', marker=None)
-ax.plot([0,max(PA0)], deltaPA(dPAout.beta, np.array([0,max(PA0)])), 'g')
+ax.plot([0,max(PA0)], deltaPA(dPAcor.beta, np.array([0, max(PA0)])), 'g')
 plt.xlabel('Cataloged PA [deg]')
 plt.ylabel('Measured PA [deg]')
 xlim = ax.get_xlim()
+ylim = ax.get_ylim()
 xlim = 0, xlim[1]
 ax.set_xlim(xlim)
 plt.title('R-band PA offset')
-plt.show()
+
+#Compute where the annotation should be placed
+ySpan = np.max(ylim) - np.min(ylim)
+xSpan = np.max(xlim) - np.min(xlim)
+xtxt = 0.1*xSpan + np.min(xlim)
+ytxt = 0.9*ySpan + np.min(ylim)
+
+plt.text(xtxt, ytxt, 'PA offset = {0:4.3g} +/- {1:4.3g}'.format(
+    dPAout.beta[1], dPAout.sd_beta[1]))
 pdb.set_trace()
+plt.close()
+plt.ioff()
 
 print('Writing calibration data to disk')
 calTable.write(calDataFile, format='csv')
