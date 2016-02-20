@@ -38,7 +38,7 @@ from AstroImage import AstroImage
 font = {'family': 'sans-serif',
         'color':  'black',
         'weight': 'normal',
-        'size': 14L369
+        'size': 14
         }
 
 # This is the location where all pyPol data will be saved
@@ -383,10 +383,6 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
                     P    = np.sqrt(U**2 + Q**2)
                     sigP = np.sqrt((U*sigU)**2 + (Q*sigQ)**2)/P
 
-                    # Scale up to percentages
-                    P *= 100.0
-                    sigP *= 100.0
-
                     # ...and de-bias the polarization measurements
                     if P/sigP <= 1:
                         P = 0
@@ -404,6 +400,10 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
                     # TODO Double check that this matches the formula in PEGS_pol
                     # I think that PEGS pol is actually MISSING a factor of P
                     # in the denominator.
+
+                    # Scale up polarization values to percentages
+                    P    *= 100.0
+                    sigP *= 100.0
 
                     # Check that the polarization is reasonable
                     # (e.g. R-band, 20150119, HD38563A is problematic)
@@ -568,6 +568,10 @@ for key in PAkeys:
     # Add the measured PA values to the list of measured PA values
     PA1.extend(tmpPA[goodInds])
 
+# Convert these to arrays
+PA0 = np.array(PA0)
+PA1 = np.array(PA1)
+
 # Grab the names of the uncertainty columns
 sigStart = lambda s: s.startswith('sPA_V_')
 sigBool = list(map(sigStart, polStandardTable_V.keys()))
@@ -619,6 +623,17 @@ calTable.add_row(['V', PEout.beta[0], PEout.sd_beta[0],
 # Apply the correction terms
 dPAval = dPAout.beta[1]
 PAcor  = ((PAsign*(PA1 - dPAval)) + 720.0) % 180.0
+
+# TODO
+# Check if PAcor values are closer corresponding PA0 values
+# by adding or subtracting 180
+PAminus = np.abs((PAcor - 180) - PA0 ) < np.abs(PAcor - PA0)
+if np.sum(PAminus) > 0:
+    PAcor[np.where(PAminus)] = PAcor[np.where(PAminus)] - 180
+
+PAplus = np.abs((PAcor + 180) - PA0 ) < np.abs(PAcor - PA0)
+if np.sum(PAplus) > 0:
+    PAcor[np.where(PAplus)] = PAcor[np.where(PAplus)] + 180
 
 # Do a final regression to plot-test if things are right
 data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
@@ -833,6 +848,16 @@ calTable.add_row(['R', PEout.beta[0], PEout.sd_beta[0],
 # Apply the correction terms
 dPAval = dPAout.beta[1]
 PAcor  = ((PAsign*(PA1 - dPAval)) + 720.0) % 180.0
+
+# Check if the correct PAs need 180 added or subtracted.
+PAminus = np.abs((PAcor - 180) - PA0 ) < np.abs(PAcor - PA0)
+if np.sum(PAminus) > 0:
+    PAcor[np.where(PAminus)] = PAcor[np.where(PAminus)] - 180
+
+PAplus = np.abs((PAcor + 180) - PA0 ) < np.abs(PAcor - PA0)
+if np.sum(PAplus) > 0:
+    PAcor[np.where(PAplus)] = PAcor[np.where(PAplus)] + 180
+
 
 # Do a final regression to plot-test if things are right
 data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
