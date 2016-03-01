@@ -19,6 +19,7 @@ import pdb
 # Add the AstroImage class
 sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
 from AstroImage import AstroImage
+import image_tools
 
 # This script will run the image averaging step of the pyPol reduction
 
@@ -42,6 +43,10 @@ if (not os.path.isdir(polarimetryDir)):
 polAngDir = os.path.join(polarimetryDir, 'polAngImgs')
 if (not os.path.isdir(polAngDir)):
     os.mkdir(polAngDir, 0o755)
+
+# Setup PRISM detector properties
+read_noise = 13.0 # electrons
+effective_gain = 3.3 # electrons/ADU
 
 # Read in the indexFile data and select the filenames
 print('\nReading file index from disk')
@@ -161,8 +166,12 @@ for group in fileIndexByTarget.groups:
                 B1bkg = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
                                        method='median', mask=mask)
 
-                # Catch any saturated values and "mask" them with NaNs
-                badInds = np.where(Aimg.arr <= 0)
+                # Catch any non-finite values and "mask" them with -1e6 value
+                nanInds = np.where(np.logical_not(np.isfinite(Aimg.arr)))
+                Aimg.arr[nanInds] = -1e6
+
+                # Catch saturated negative values
+                badInds = np.where(Aimg.arr < -3*read_noise/effective_gain)
                 Aimg.arr[badInds] = np.NaN
 
                 # Perform the actual background subtraction
@@ -174,8 +183,10 @@ for group in fileIndexByTarget.groups:
             # Now that all the backgrounds have been subtracted,
             # let's align the images and compute an average image
             # TODO Should I use "cross-correlation" alignment?
-            sciImgList = AstroImage.align_stack(sciImgList, padding=np.NaN)
-            avgImg     = AstroImage.stacked_average(sciImgList)
+            sciImgList = image_tools.align_images(sciImgList, padding=-1e6)
+            avgImg     = image_tools.combine_images(sciImgList,
+                effective_gain = effective_gain,
+                read_noise = read_noise)
 
     else:
         # Handle HEX-DITHERS images
@@ -187,29 +198,61 @@ for group in fileIndexByTarget.groups:
             pdb.set_trace()
 
         # Now align and combine these images into a single average image
-        imgList = AstroImage.align_stack(imgList, padding=np.NaN)
-        avgImg  = AstroImage.stacked_average(imgList)
+        imgList = image_tools.align_images(imgList, padding=-1e6)
 
-    # I can only "redo the astrometry" if the file is written to disk
-    avgImg.filename = 'tmp.fits'
-    avgImg.write()
+        # Loop through and catch any pixels which need masking...
+        for img in imgList:
+            # Catch any non-finite values and "mask" them with -1e6 value
+            nanInds = np.where(np.logical_not(np.isfinite(img.arr)))
+            img.arr[nanInds] = -1e6
+
+            # Catch saturated negative values
+            badInds = np.where(img.arr < -3*read_noise/effective_gain)
+            img.arr[badInds] = np.NaN
+
+        avgImg  = image_tools.combine_images(imgList,
+            effective_gain = effective_gain,
+            read_noise = read_noise)
+
+    # It is only possible to "redo the astrometry" if the file on the disk
+    # First make a copy of the average image
+    tmpImg = avgImg.copy()
+    # Replace NaNs with something finite and name the file "tmp.fits"
+    tmpImg.arr = np.nan_to_num(tmpImg.arr)
+    tmpImg.filename = 'tmp.fits'
+
+    # Delete the sigma attribute
+    if hasattr(tmpImg, 'sigma'):
+        del tmpImg.sigma
+
+    # Record the temporary file to disk for performing astrometry
+    tmpImg.write()
 
     # Solve the stacked image astrometry
-    success  = avgImg.astrometry()
+    avgImg1, success = image_tools.astrometry(tmpImg)
 
-    # Clean up temporary files
-    # TODO update to by system independent
-    # (use subprocess module and "del" command for Windows)
-    # See AstroImage.astrometry for example
-    if os.path.isfile('none'):
-        os.system('rm none')
-    if os.path.isfile('tmp.fits'):
-        os.system('rm tmp.fits')
+    # Re-assign the uncertainty array to the output image
+    if hasattr(avgImg, 'sigma'):
+        avgImg1.sigma = avgImg.sigma
 
     # With successful astrometry, save result to disk
     if success:
         print('astrometry succeded')
-        avgImg.write(outFile)
+
+        # Clean up temporary files
+        # TODO update to by system independent
+        # (use subprocess module and "del" command for Windows)
+        # See AstroImage.astrometry for example
+
+        del tmpImg
+
+        if os.path.isfile('none'):
+            os.system('rm none')
+        if os.path.isfile('tmp.fits'):
+            os.system('rm tmp.fits')
+
+        # Save the file to disk
+        avgImg1.write(outFile)
     else:
         print('astrometry failed?!')
         pdb.set_trace()

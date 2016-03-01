@@ -235,10 +235,18 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
 
                 # Find all sources in the image,
                 # and match to the calibration positions
-                mean, median, std = sigma_clipped_stats(img.arr, sigma=3.0, iters=5)
+                goodInds = np.where(np.isfinite(img.arr))
+                mean, median, std = sigma_clipped_stats(img.arr[goodInds],
+                    sigma=3.0, iters=5)
+
+                # Make a non-NaN version of the image array
+                thisArr = np.nan_to_num(img.arr.copy())
+
+                # Detect the sources above the threshold and match to the
+                # calibration positions
                 threshold = median + 3.0*std
                 fwhm    = 6.0
-                sources = daofind(img.arr, threshold, fwhm, ratio=1.0, theta=0.0,
+                sources = daofind(thisArr, threshold, fwhm, ratio=1.0, theta=0.0,
                                   sigma_radius=1.5, sharplo=0.2, sharphi=1.0,
                                   roundlo=-1.0, roundhi=1.0, sky=0.0,
                                   exclude_border=True)
@@ -288,7 +296,7 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
                 # plt.ion()
                 # fig = plt.figure(figsize = (8,8))
                 # ax  = fig.add_subplot(1,1,1)
-                # axIm = ax.imshow(img.arr, cmap='cubehelix',vmin=1,vmax=500, origin='lower')
+                # axIm = ax.imshow(thisArr, cmap='cubehelix',vmin=1,vmax=500, origin='lower')
                 # xlim, ylim = ax.get_xlim(), ax.get_ylim()
                 # line1, = ax.plot(xStar1, yStar1,
                 #                 linestyle='None',
@@ -305,9 +313,9 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
                 annulus_apertures = CircularAnnulus(sourcePos, r_in=22.0, r_out=24.0)
 
                 # Perform the basic photometry
-                rawflux_table = aperture_photometry(img.arr, apertures,
+                rawflux_table = aperture_photometry(thisArr, apertures,
                     error=img.sigma)
-                bkgflux_table = aperture_photometry(img.arr, annulus_apertures,
+                bkgflux_table = aperture_photometry(thisArr, annulus_apertures,
                     error=img.sigma)
                 phot_table = hstack([rawflux_table, bkgflux_table],
                     table_names=['raw', 'bkg'])
@@ -318,9 +326,24 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
                 bkg_sum = bkg_mean * apertures.area()
                 bkg_sig = bkg_sig * apertures.area()
 
+                # Compute the variance in the background pixels for each star
+                ny, nx  = thisArr.shape
+                yy, xx  = np.mgrid[0:ny, 0:nx]
+                bkg_var = []
+                for xs, ys in sourcePos:
+                    distFromStar = np.sqrt((xx - xs)**2 + (yy - ys)**2)
+                    skyPixInds   = np.where(np.logical_and(
+                        (distFromStar > 22.0), (distFromStar < 24.0)))
+                    bkg_var.append(np.var(thisArr[skyPixInds]))
+
+                # Convert the background variance into an array
+                bkg_var = np.array(bkg_var)
+
                 # Compute the final photometry and its uncertainty
                 final_sum = phot_table['aperture_sum_raw'] - bkg_sum
-                final_sig = np.sqrt(phot_table['aperture_sum_err_raw']**2 + bkg_sig**2)
+                final_sig = np.sqrt(phot_table['aperture_sum_err_raw']**2
+                    + bkg_sig**2
+                    + bkg_var)
                 phot_table['residual_aperture_sum'] = final_sum
                 phot_table['residual_aperture_sum_err'] = final_sig
 
@@ -360,81 +383,91 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
             # Loop through each of the stars
             for star in allStars:
                 # Check that this star is present in *ALL* of the dictionaries
-                if (star in I000.keys() and
-                    star in I200.keys() and
-                    star in I400.keys() and
-                    star in I600.keys()):
-                    # Then add this star's polarization data to the table
-                    # First compute U and its uncertainty
-                    A = I200[star] - I600[star]
-                    B = I200[star] + I600[star]
-                    sigAandB = np.sqrt(S200[star]**2 + S600[star]**2)
-                    U = A/B
-                    sigU = np.abs(U*sigAandB*np.sqrt(A**(-2) + B**(-2)))
+                skipStar = False
+                if star not in I000.keys():
+                    print('\tStar {0} was not uniquely detected in the I000 image'.format(star))
+                    skipStar = True
+                if star not in I200.keys():
+                    print('\tStar {0} was not uniquely detected in the I200 image'.format(star))
+                    skipStar = True
+                if star not in I400.keys():
+                    print('\tStar {0} was not uniquely detected in the I400 image'.format(star))
+                    skipStar = True
+                if star not in I600.keys():
+                    print('\tStar {0} was not uniquely detected in the I600 image'.format(star))
+                    skipStar = True
 
-                    # then compute Q and its uncertainty
-                    A = I000[star] - I400[star]
-                    B = I000[star] + I400[star]
-                    sigAandB = np.sqrt(S000[star]**2 + S400[star]**2)
-                    Q = A/B
-                    sigQ = np.abs(Q*sigAandB*np.sqrt(A**(-2) + B**(-2)))
+                # Skip this star if it was not detected in one of the images
+                if skipStar: continue
 
-                    # Now compute P and its uncertainty...
-                    P    = np.sqrt(U**2 + Q**2)
-                    sigP = np.sqrt((U*sigU)**2 + (Q*sigQ)**2)/P
+                # If the star is found in ALL the images, then continue...
+                # Add this star's polarization data to the table
+                # First compute U and its uncertainty
+                A = I200[star] - I600[star]
+                B = I200[star] + I600[star]
+                sigAandB = np.sqrt(S200[star]**2 + S600[star]**2)
+                U = A/B
+                sigU = np.abs(U*sigAandB*np.sqrt(A**(-2) + B**(-2)))
 
-                    # ...and de-bias the polarization measurements
-                    if P/sigP <= 1:
-                        P = 0
-                    else:
-                        P = np.sqrt(P**2 - sigP**2)
+                # then compute Q and its uncertainty
+                A = I000[star] - I400[star]
+                B = I000[star] + I400[star]
+                sigAandB = np.sqrt(S000[star]**2 + S400[star]**2)
+                Q = A/B
+                sigQ = np.abs(Q*sigAandB*np.sqrt(A**(-2) + B**(-2)))
 
-                    # Compute PA and its uncertainty
-                    PA    = 0.5*np.arctan2(U, Q)*rad2deg
+                # Now compute P and its uncertainty...
+                P    = np.sqrt(U**2 + Q**2)
+                sigP = np.sqrt((U*sigU)**2 + (Q*sigQ)**2)/P
 
-                    # lazy way (assumes sigQ ~= sigU)
-                    # sigPA = 0.5*rad2deg*(sigP/P)
-
-                    # Real way (uses actual sigQ and sigU)
-                    sigPA = 0.5*rad2deg*np.sqrt((U*sigQ)**2 + (Q*sigU)**2)/P**2
-                    # TODO Double check that this matches the formula in PEGS_pol
-                    # I think that PEGS pol is actually MISSING a factor of P
-                    # in the denominator.
-
-                    # Scale up polarization values to percentages
-                    P    *= 100.0
-                    sigP *= 100.0
-
-                    # Check that the polarization is reasonable
-                    # (e.g. R-band, 20150119, HD38563A is problematic)
-                    if P > 10:
-                        print('\tThe polarization of star {0} seems to high'.format(star))
-                        print('\tskipping to next star')
-                        continue
-
-                    # Update the polStandardTables accordingly
-                    if thisWaveband == 'V':
-                        # Figure out which row of the polStandardTable to modify
-                        modRow = np.where(polStandardTable_V['Name'] == star)
-
-                        # Fill in the P and PA values
-                        polStandardTable_V[P_key][modRow]   = P
-                        polStandardTable_V[sP_key][modRow]  = sigP
-                        polStandardTable_V[PA_key][modRow]  = PA
-                        polStandardTable_V[sPA_key][modRow] = sigPA
-                    if thisWaveband == 'R':
-                        # Figure out which row of the polStandardTable to modify
-                        modRow = np.where(polStandardTable_R['Name'] == star)
-
-                        # Fill in the P and PA values
-                        polStandardTable_R[P_key][modRow]   = P
-                        polStandardTable_R[sP_key][modRow]  = sigP
-                        polStandardTable_R[PA_key][modRow]  = PA
-                        polStandardTable_R[sPA_key][modRow] = sigPA
-                # Otherwise don't include that star
+                # ...and de-bias the polarization measurements
+                if P/sigP <= 1:
+                    P = 0
                 else:
-                    print('\tStar {0} was not uniquely detected in an image'.format(star))
-                    print('\tOmitting this measurement from the table')
+                    P = np.sqrt(P**2 - sigP**2)
+
+                # Compute PA and its uncertainty
+                PA    = 0.5*np.arctan2(U, Q)*rad2deg
+
+                # lazy way (assumes sigQ ~= sigU)
+                # sigPA = 0.5*rad2deg*(sigP/P)
+
+                # Real way (uses actual sigQ and sigU)
+                sigPA = 0.5*rad2deg*np.sqrt((U*sigQ)**2 + (Q*sigU)**2)/P**2
+                # TODO Double check that this matches the formula in PEGS_pol
+                # I think that PEGS pol is actually MISSING a factor of P
+                # in the denominator.
+
+                # Scale up polarization values to percentages
+                P    *= 100.0
+                sigP *= 100.0
+
+                # Check that the polarization is reasonable
+                # (e.g. R-band, 20150119, HD38563A is problematic)
+                if P > 10:
+                    print('\tThe polarization of star {0} seems to high'.format(star))
+                    print('\tskipping to next star')
+                    continue
+
+                # Update the polStandardTables accordingly
+                if thisWaveband == 'V':
+                    # Figure out which row of the polStandardTable to modify
+                    modRow = np.where(polStandardTable_V['Name'] == star)
+
+                    # Fill in the P and PA values
+                    polStandardTable_V[P_key][modRow]   = P
+                    polStandardTable_V[sP_key][modRow]  = sigP
+                    polStandardTable_V[PA_key][modRow]  = PA
+                    polStandardTable_V[sPA_key][modRow] = sigPA
+                if thisWaveband == 'R':
+                    # Figure out which row of the polStandardTable to modify
+                    modRow = np.where(polStandardTable_R['Name'] == star)
+
+                    # Fill in the P and PA values
+                    polStandardTable_R[P_key][modRow]   = P
+                    polStandardTable_R[sP_key][modRow]  = sigP
+                    polStandardTable_R[PA_key][modRow]  = PA
+                    polStandardTable_R[sPA_key][modRow] = sigPA
 
     # Now that ALL the data have been processed....
     # Write the results to disk for future reference
@@ -552,8 +585,8 @@ PAinds  = np.where(PAbool)
 PAkeys  = np.array(polStandardTable_V.keys())[PAinds]
 
 # loop through each column (column <==> night)
-PA0 = list()
-PA1 = list()
+PA0_V = list()
+PA1_V = list()
 for key in PAkeys:
     # Grab all the measured PA values from that night
     tmpPA    =  polStandardTable_V[key].data
@@ -563,14 +596,14 @@ for key in PAkeys:
     goodInds = np.where(tmpPA != 0)
 
     # Add the true PA values to the list of true PA values
-    PA0.extend(polStandardTable_V['PA_V'].data[goodInds])
+    PA0_V.extend(polStandardTable_V['PA_V'].data[goodInds])
 
     # Add the measured PA values to the list of measured PA values
-    PA1.extend(tmpPA[goodInds])
+    PA1_V.extend(tmpPA[goodInds])
 
 # Convert these to arrays
-PA0 = np.array(PA0)
-PA1 = np.array(PA1)
+PA0_V = np.array(PA0_V)
+PA1_V = np.array(PA1_V)
 
 # Grab the names of the uncertainty columns
 sigStart = lambda s: s.startswith('sPA_V_')
@@ -578,8 +611,8 @@ sigBool = list(map(sigStart, polStandardTable_V.keys()))
 sigInds = np.where(sigBool)
 sigKeys = np.array(polStandardTable_V.keys())[sigInds]
 # Loop through each uncertainty column
-sPA0 = list()
-sPA1 = list()
+sPA0_V = list()
+sPA1_V = list()
 for key in sigKeys:
     # Grab the polarization measurements from this column
     tmpSig = polStandardTable_V[key].data
@@ -589,17 +622,17 @@ for key in sigKeys:
     goodInds = np.where(tmpSig != 0)
 
     # Extend the P0 and P1 lists to include good data
-    sPA0.extend(polStandardTable_V['sP_V'].data[goodInds])
-    sPA1.extend(polStandardTable_V[key].data[goodInds])
+    sPA0_V.extend(polStandardTable_V['sP_V'].data[goodInds])
+    sPA1_V.extend(polStandardTable_V[key].data[goodInds])
 
-# Fit a model to the PA1 vs. PA0 data
+# Fit a model to the PA1_V vs. PA0_V data
 # Define the model to be used in the fitting
 def deltaPA(B, x):
      return B[0]*x + B[1]
 
 # Set up ODR with the model and data.
 deltaPAmodel = Model(deltaPA)
-data = RealData(PA0, PA1, sx=sPA0, sy=sPA1)
+data = RealData(PA0_V, PA1_V, sx=sPA0_V, sy=sPA1_V)
 
 # On first pass, just figure out what the sign is
 odr    = ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
@@ -622,21 +655,24 @@ calTable.add_row(['V', PEout.beta[0], PEout.sd_beta[0],
 
 # Apply the correction terms
 dPAval = dPAout.beta[1]
-PAcor  = ((PAsign*(PA1 - dPAval)) + 720.0) % 180.0
+PAcor  = ((PAsign*(PA1_V - dPAval)) + 720.0) % 180.0
 
 # TODO
-# Check if PAcor values are closer corresponding PA0 values
+# Check if PAcor values are closer corresponding PA0_V values
 # by adding or subtracting 180
-PAminus = np.abs((PAcor - 180) - PA0 ) < np.abs(PAcor - PA0)
+PAminus = np.abs((PAcor - 180) - PA0_V ) < np.abs(PAcor - PA0_V)
 if np.sum(PAminus) > 0:
     PAcor[np.where(PAminus)] = PAcor[np.where(PAminus)] - 180
 
-PAplus = np.abs((PAcor + 180) - PA0 ) < np.abs(PAcor - PA0)
+PAplus = np.abs((PAcor + 180) - PA0_V ) < np.abs(PAcor - PA0_V)
 if np.sum(PAplus) > 0:
     PAcor[np.where(PAplus)] = PAcor[np.where(PAplus)] + 180
 
+# Save corrected values for possible future use
+PAcor_V = PAcor.copy()
+
 # Do a final regression to plot-test if things are right
-data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
+data = RealData(PA0_V, PAcor, sx=sPA0_V, sy=sPA1_V)
 odr  = ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
 dPAcor = odr.run()
 
@@ -645,12 +681,12 @@ dPAcor = odr.run()
 print('\n\nGenerating PA plot')
 fig.delaxes(ax)
 ax = fig.add_subplot(1,1,1)
-#ax.errorbar(PA0, PA1, xerr=sPA0, yerr=sPA1,
+#ax.errorbar(PA0_V, PA1_V, xerr=sPA0_V, yerr=sPA1_V,
 #    ecolor='b', linestyle='None', marker=None)
-#ax.plot([0,max(PA0)], deltaPA(dPAout.beta, np.array([0,max(PA0)])), 'g')
-ax.errorbar(PA0, PAcor, xerr=sPA0, yerr=sPA1,
+#ax.plot([0,max(PA0_V)], deltaPA(dPAout.beta, np.array([0,max(PA0_V)])), 'g')
+ax.errorbar(PA0_V, PAcor, xerr=sPA0_V, yerr=sPA1_V,
     ecolor='b', linestyle='None', marker=None)
-ax.plot([0,max(PA0)], deltaPA(dPAcor.beta, np.array([0, max(PA0)])), 'g')
+ax.plot([0,max(PA0_V)], deltaPA(dPAcor.beta, np.array([0, max(PA0_V)])), 'g')
 plt.xlabel('Cataloged PA [deg]')
 plt.ylabel('Measured PA [deg]')
 xlim = ax.get_xlim()
@@ -706,37 +742,15 @@ sP0 = list()
 sP1 = list()
 for key in sigKeys:
     # Grab the polarization measurements from this column
-    tmpP = polStandardTable_R[key].data
+    tmp_sP = polStandardTable_R[key].data
 
     # Grab the non-zero measurements
     # (zero is the current "bad data" filler)
-    goodInds = np.where(tmpP != 0)
+    goodInds = np.where(tmp_sP != 0)
 
     # Extend the P0 and P1 lists to include good data
     sP0.extend(polStandardTable_R['sP_R'].data[goodInds])
     sP1.extend(polStandardTable_R[key].data[goodInds])
-
-# Grab the names of the uncertainty columns
-sigStart = lambda s: s.startswith('sP_R_')
-sigBool = list(map(sigStart, polStandardTable_R.keys()))
-sigInds = np.where(sigBool)
-sigKeys = np.array(polStandardTable_R.keys())[sigInds]
-# Loop through each uncertainty column
-sPA0 = list()
-sPA1 = list()
-for key in sigKeys:
-    # Grab the polarization measurements from this column
-    tmpSig = polStandardTable_R[key].data
-
-    # Grab the non-zero measurements
-    # (zero is the current "bad data" filler)
-    goodInds = np.where(tmpSig != 0)
-
-    # Extend the P0 and P1 lists to include good data
-    sPA0.extend(polStandardTable_R['sP_R'].data[goodInds])
-    sPA1.extend(polStandardTable_R[key].data[goodInds])
-
-# Fit a model to the PA1 vs. PA0 data
 
 # Set up ODR with the model and data.
 data = RealData(P0, P1, sx=sP0, sy=sP1)
@@ -787,8 +801,8 @@ PAinds  = np.where(PAbool)
 PAkeys  = np.array(polStandardTable_R.keys())[PAinds]
 
 # loop through each column (column <==> night)
-PA0 = list()
-PA1 = list()
+PA0_R = list()
+PA1_R = list()
 for key in PAkeys:
     # Grab all the measured PA values from that night
     tmpPA    =  polStandardTable_R[key].data
@@ -798,10 +812,14 @@ for key in PAkeys:
     goodInds = np.where(tmpPA != 0)
 
     # Add the true PA values to the list of true PA values
-    PA0.extend(polStandardTable_R['PA_R'].data[goodInds])
+    PA0_R.extend(polStandardTable_R['PA_R'].data[goodInds])
 
     # Add the measured PA values to the list of measured PA values
-    PA1.extend(tmpPA[goodInds])
+    PA1_R.extend(tmpPA[goodInds])
+
+# Convert to arrays
+PA0_R = np.array(PA0_R)
+PA1_R = np.array(PA1_R)
 
 # Grab the names of the uncertainty columns
 sigStart = lambda s: s.startswith('sPA_R_')
@@ -809,8 +827,8 @@ sigBool = list(map(sigStart, polStandardTable_R.keys()))
 sigInds = np.where(sigBool)
 sigKeys = np.array(polStandardTable_R.keys())[sigInds]
 # Loop through each uncertainty column
-sPA0 = list()
-sPA1 = list()
+sPA0_R = list()
+sPA1_R = list()
 for key in sigKeys:
     # Grab the polarization measurements from this column
     tmpSig = polStandardTable_R[key].data
@@ -820,12 +838,16 @@ for key in sigKeys:
     goodInds = np.where(tmpSig != 0)
 
     # Extend the P0 and P1 lists to include good data
-    sPA0.extend(polStandardTable_R['sP_R'].data[goodInds])
-    sPA1.extend(polStandardTable_R[key].data[goodInds])
+    sPA0_R.extend(polStandardTable_R['sP_R'].data[goodInds])
+    sPA1_R.extend(polStandardTable_R[key].data[goodInds])
 
-# Fit a model to the PA1 vs. PA0 data
+# Convrt to arrays
+sPA0_R = np.array(sPA0_R)
+sPA1_R = np.array(sPA1_R)
+
+# Fit a model to the PA1 vs. PA0_R data
 # Set up ODR with the model and data.
-data = RealData(PA0, PA1, sx=sPA0, sy=sPA1)
+data = RealData(PA0_R, PA1_R, sx=sPA0_R, sy=sPA1_R)
 
 # On first pass, just figure out what the sign is
 odr    = ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
@@ -845,22 +867,25 @@ dPAout.pprint()
 # Store the final calibration data in the calTable variable
 calTable.add_row(['R', PEout.beta[0], PEout.sd_beta[0],
                PAsign, dPAout.beta[1], dPAout.sd_beta[1]])
+
 # Apply the correction terms
 dPAval = dPAout.beta[1]
-PAcor  = ((PAsign*(PA1 - dPAval)) + 720.0) % 180.0
+PAcor  = ((PAsign*(PA1_R - dPAval)) + 720.0) % 180.0
 
 # Check if the correct PAs need 180 added or subtracted.
-PAminus = np.abs((PAcor - 180) - PA0 ) < np.abs(PAcor - PA0)
+PAminus = np.abs((PAcor - 180) - PA0_R ) < np.abs(PAcor - PA0_R)
 if np.sum(PAminus) > 0:
     PAcor[np.where(PAminus)] = PAcor[np.where(PAminus)] - 180
 
-PAplus = np.abs((PAcor + 180) - PA0 ) < np.abs(PAcor - PA0)
+PAplus = np.abs((PAcor + 180) - PA0_R ) < np.abs(PAcor - PA0_R)
 if np.sum(PAplus) > 0:
     PAcor[np.where(PAplus)] = PAcor[np.where(PAplus)] + 180
 
+# Save corrected values for possible future use
+PAcor_R = PAcor.copy()
 
 # Do a final regression to plot-test if things are right
-data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
+data = RealData(PA0_R, PAcor, sx=sPA0_R, sy=sPA1_R)
 odr  = ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
 dPAcor = odr.run()
 
@@ -870,12 +895,12 @@ dPAcor = odr.run()
 print('\n\nGenerating PA plot')
 fig.delaxes(ax)
 ax = fig.add_subplot(1,1,1)
-#ax.errorbar(PA0, PA1, xerr=sPA0, yerr=sPA1,
+#ax.errorbar(PA0_R, PA1, xerr=sPA0_R, yerr=sPA1,
 #    ecolor='b', linestyle='None', marker=None)
-#ax.plot([0,max(PA0)], deltaPA(dPAout.beta, np.array([0,max(PA0)])), 'g')
-ax.errorbar(PA0, PAcor, xerr=sPA0, yerr=sPA1,
+#ax.plot([0,max(PA0_R)], deltaPA(dPAout.beta, np.array([0,max(PA0_R)])), 'g')
+ax.errorbar(PA0_R, PAcor, xerr=sPA0_R, yerr=sPA1_R,
     ecolor='b', linestyle='None', marker=None)
-ax.plot([0,max(PA0)], deltaPA(dPAcor.beta, np.array([0, max(PA0)])), 'g')
+ax.plot([0,max(PA0_R)], deltaPA(dPAcor.beta, np.array([0, max(PA0_R)])), 'g')
 plt.xlabel('Cataloged PA [deg]')
 plt.ylabel('Measured PA [deg]')
 xlim = ax.get_xlim()
@@ -893,8 +918,114 @@ ytxt = 0.9*ySpan + np.min(ylim)
 plt.text(xtxt, ytxt, 'PA offset = {0:4.3g} +/- {1:4.3g}'.format(
     dPAout.beta[1], dPAout.sd_beta[1]))
 pdb.set_trace()
-plt.close()
-plt.ioff()
+
+#####################################################
+# Check if a single deltaPA value is appropriate
+#####################################################
+# Test if R-band and V-band deltaPA are compatible...
+V_row = np.where(calTable['Waveband'] == np.array(['V']*len(calTable), dtype='S'))
+R_row = np.where(calTable['Waveband'] == np.array(['R']*len(calTable), dtype='S'))
+deltaDeltaPA = np.abs(calTable[R_row]['dPA'].data - calTable[V_row]['dPA'].data)
+sig_deltaDPA = np.sqrt(calTable[R_row]['s_dPA'].data**2 + calTable[V_row]['s_dPA'].data**2)
+
+# Check if this these two values are significantly different from each-other
+if deltaDeltaPA/sig_deltaDPA > 3.0:
+    print('These two calibration constants are significantly different')
+else:
+    # If they are not significantly different, then re-compute the single
+    # calibration constant.
+    # BUild the complete list of catalog stars...
+    PA0 = list(PA0_V.copy())
+    PA0.extend(PA0_R)
+    PA0 = np.array(PA0)
+
+    # ...and the catalog star uncertainties
+    sPA0 = list(sPA0_V.copy())
+    sPA0.extend(sPA0_R)
+    sPA0 = np.array(sPA0)
+
+    # Build the complete list of measured PAs...
+    PA1 = list(PA1_V.copy())
+    PA1.extend(PA1_R)
+    PA1 = np.array(PA1)
+
+    # ...and the measured PA uncertainties
+    sPA1 = list(sPA1_V.copy())
+    sPA1.extend(sPA1_R)
+    sPA1 = np.array(sPA1)
+
+    # Do a final regression to plot-test if things are right
+    data = RealData(PA0, PA1, sx=sPA0, sy=sPA1)
+    # On first pass, just figure out what the sign is
+    odr    = ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
+    dPAout = odr.run()
+    PAsign = np.round(dPAout.beta[0])
+
+    # Build the proper fitter class with the slope fixed
+    odr = ODR(data, deltaPAmodel, beta0=[PAsign, 90.0], ifixb=[0,1])
+
+    # Run the regression.
+    dPAout = odr.run()
+
+    # Use the in-built pprint method to give us results.
+    print('Final delta PA fitting results')
+    dPAout.pprint()
+
+    # Update the calibration table
+    calTable['dPA']   = dPAout.beta[1]
+    calTable['s_dPA'] = dPAout.sd_beta[1]
+
+    # Apply the correction terms
+    dPAval = dPAout.beta[1]
+    PAcor  = ((PAsign*(PA1 - dPAval)) + 720.0) % 180.0
+
+    # Check if the correct PAs need 180 added or subtracted.
+    PAminus = np.abs((PAcor - 180) - PA0 ) < np.abs(PAcor - PA0)
+    if np.sum(PAminus) > 0:
+        PAcor[np.where(PAminus)] = PAcor[np.where(PAminus)] - 180
+
+    PAplus = np.abs((PAcor + 180) - PA0 ) < np.abs(PAcor - PA0)
+    if np.sum(PAplus) > 0:
+        PAcor[np.where(PAplus)] = PAcor[np.where(PAplus)] + 180
+
+    # # Save corrected values for possible future use
+    # PAcor_R = PAcor.copy()
+
+    # Do a final regression to plot-test if things are right
+    data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
+    odr  = ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
+    dPAcor = odr.run()
+
+    # Plot up the results
+    # PA measured vs. PA true
+    print('\n\nGenerating PA plot')
+    fig.delaxes(ax)
+    ax = fig.add_subplot(1,1,1)
+    #ax.errorbar(PA0_R, PA1, xerr=sPA0_R, yerr=sPA1,
+    #    ecolor='b', linestyle='None', marker=None)
+    #ax.plot([0,max(PA0_R)], deltaPA(dPAout.beta, np.array([0,max(PA0_R)])), 'g')
+    ax.errorbar(PA0, PAcor, xerr=sPA0, yerr=sPA1,
+        ecolor='b', linestyle='None', marker=None)
+    ax.plot([0,max(PA0)], deltaPA(dPAcor.beta, np.array([0, max(PA0)])), 'g')
+    plt.xlabel('Cataloged PA [deg]')
+    plt.ylabel('Measured PA [deg]')
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    xlim = 0, xlim[1]
+    ax.set_xlim(xlim)
+    plt.title('Final Combined PA offset')
+
+    #Compute where the annotation should be placed
+    ySpan = np.max(ylim) - np.min(ylim)
+    xSpan = np.max(xlim) - np.min(xlim)
+    xtxt = 0.1*xSpan + np.min(xlim)
+    ytxt = 0.9*ySpan + np.min(ylim)
+
+    plt.text(xtxt, ytxt, 'PA offset = {0:4.3g} +/- {1:4.3g}'.format(
+        dPAout.beta[1], dPAout.sd_beta[1]))
+    pdb.set_trace()
+    plt.close()
+    plt.ioff()
 
 print('Writing calibration data to disk')
 calTable.write(calDataFile, format='csv')
