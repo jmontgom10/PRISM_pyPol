@@ -100,7 +100,7 @@ for group in fileIndexByTarget.groups:
 
     # Use the "align_stack" method to align the newly created image list
     print('\nAligning images\n')
-    polAngImgs = image_tools.align_stack(polAngImgs,
+    polAngImgs = image_tools.align_images(polAngImgs,
         mode='cross_correlate', subPixel=True, padding=np.nan)
 
     # Convert the list into a dictionary
@@ -110,14 +110,17 @@ for group in fileIndexByTarget.groups:
     # Stokes I
     #**********************************************************************
     # Average the images to get stokes I
-    stokesI = image_tools.stacked_average([polAngImgs[0],
-                                           polAngImgs[200],
-                                           polAngImgs[400],
-                                           polAngImgs[600]])
+    stokesI = image_tools.combine_images([polAngImgs[0],
+                                          polAngImgs[200],
+                                          polAngImgs[400],
+                                          polAngImgs[600]])
     stokesI = 2 * stokesI
-    
+
     # Perform astrometry to apply to the headers of all the other images...
-    stokesI = image_tools.astrometry(stokesI)
+    stokesI, success = image_tools.astrometry(stokesI)
+
+    # Check if astrometry solution was successful
+    if not success: pdb.set_trace()
 
     #**********************************************************************
     # Stokes Q
@@ -128,7 +131,7 @@ for group in fileIndexByTarget.groups:
 
     # Divide the difference images
     stokesQ = A/B
-    
+
     # Update the header to include the new astrometry
     stokesQ.header = stokesI.header
 
@@ -188,7 +191,7 @@ for group in fileIndexByTarget.groups:
     #**********************************************************************
     # Generate a complete mask of all bad elements
     fullMask = np.logical_or(Qmask, Umask)
- 
+
     stokesU.arr[np.where(Umask)]  = np.NaN
     stokesQ.arr[np.where(Qmask)]  = np.NaN
     Pmap.arr[np.where(fullMask)]  = np.NaN

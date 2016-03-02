@@ -184,7 +184,7 @@ for group in fileIndexByTarget.groups:
             # let's align the images and compute an average image
             # TODO Should I use "cross-correlation" alignment?
             sciImgList = image_tools.align_images(sciImgList, padding=-1e6)
-            avgImg     = image_tools.combine_images(sciImgList,
+            avgImg     = image_tools.combine_images(sciImgList, output = 'MEAN',
                 effective_gain = effective_gain,
                 read_noise = read_noise)
 
@@ -210,7 +210,7 @@ for group in fileIndexByTarget.groups:
             badInds = np.where(img.arr < -3*read_noise/effective_gain)
             img.arr[badInds] = np.NaN
 
-        avgImg  = image_tools.combine_images(imgList,
+        avgImg  = image_tools.combine_images(imgList, output = 'MEAN',
             effective_gain = effective_gain,
             read_noise = read_noise)
 
