@@ -74,6 +74,8 @@ for group in fileIndexByTarget.groups:
     thisWaveband = str(np.unique(group['Waveband'].data)[0])
     thisPolAng   = str(np.unique(group['Polaroid Angle'].data)[0])
 
+    if thisTarget != 'NGC7023' or thisWaveband != 'V': continue
+
     # Test if this target-waveband-polAng combo was previously processed
     outFile = os.path.join(polAngDir,
         '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits')

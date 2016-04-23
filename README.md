@@ -193,7 +193,7 @@ standard polarization percentages and polarization position-angles. This
 information must be supplied by the user, using the 'Target' value supplied for
 these observations in the 01_buildIndex script.
 
-## 06_finalPolarimetry.py
+## 07_finalPolarimetry.py
 
 This script uses a cross-correlation method to align the averaged
 polaroid-rotation-angle images for each target and waveband, then it performs
@@ -201,6 +201,6 @@ the necessary subtraction and division methods to compute polarization
 percentage and polarization position angle maps for the extended emission in
 each image.
 
-TODO This script should
+This script should
 
-## 07_photometricCalibration
+## 08_photometricCalibration
