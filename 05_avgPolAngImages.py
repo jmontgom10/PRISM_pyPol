@@ -64,7 +64,7 @@ fileIndex = fileIndex[useFiles]
 # 2. Waveband
 # 3. Dither (pattern)
 # 4. Polaroid Angle
-fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither', 'Polaroid Angle'])
+fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither', 'Pol Ang'])
 
 # Loop through each group
 groupKeys = fileIndexByTarget.groups.keys
@@ -72,9 +72,7 @@ for group in fileIndexByTarget.groups:
     # Grab the current target information
     thisTarget   = str(np.unique(group['Target'].data)[0])
     thisWaveband = str(np.unique(group['Waveband'].data)[0])
-    thisPolAng   = str(np.unique(group['Polaroid Angle'].data)[0])
-
-    if thisTarget != 'NGC7023' or thisWaveband != 'V': continue
+    thisPolAng   = str(np.unique(group['Pol Ang'].data)[0])
 
     # Test if this target-waveband-polAng combo was previously processed
     outFile = os.path.join(polAngDir,
@@ -119,81 +117,82 @@ for group in fileIndexByTarget.groups:
     # Cleanup temporary variables
     del tmpImg
 
+    # Convert the image list into an indexable array
+    imgList = np.array(imgList)
+
     # Process images in this group according to dither type
     ditherType = np.unique(group['Dither'].data)
     if ditherType == "ABBA":
-        # Test if ABBA pattern is there
-        if (numImgs % 4) != 0:
-            # No ABBA pattern, so stop executing
-            print('No (ABBA) pattern present')
-            print('Could not guess which images are "on target"')
-            pdb.set_trace()
-        else:
-            # Proper number of images for an ABB pattern,
-            # so break the images up into
-            #"on-target" / "off-target" image lists
-            Aimgs = []
-            Bimgs = []
-            for i, img in enumerate(imgList):
-                pointing = 'ABBA'[i % 4]
-                if pointing == 'A':
-                    Aimgs.append(img)
-                if pointing == 'B':
-                    Bimgs.append(img)
+        # Break the images up into "on-target" / "off-target" image lists
+        Ainds = np.where(group['ABBA'].data == 'A')[0]
+        Binds = np.where(group['ABBA'].data == 'B')[0]
+        Aimgs = imgList[Ainds]
+        Bimgs = imgList[Binds]
 
-            # Loop through each pair and bild a bg-subtracted list
-            sciImgList = []
-            for pairNum, ABimg in enumerate(zip(Aimgs, Bimgs)):
-                Aimg = ABimg[0]
-                Bimg = ABimg[1]
-                print('\t\tProcessing on-off pair {0}'.format(pairNum+1))
+        # Loop through each pair and bild a bg-subtracted list
+        maskImgList = []
+        sciImgList  = []
+        for pairNum, ABimg in enumerate(zip(Aimgs, Bimgs)):
+            Aimg = ABimg[0]
+            Bimg = ABimg[1]
+            print('\t\tProcessing on-off pair {0}'.format(pairNum+1))
 
-                # Estimate the background for this pair
-                B1bkg     = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
-                                       method='median')
-                threshold = B1bkg.background + 3.0*B1bkg.background_rms
+            # Estimate the background for this pair
+            B1bkg     = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
+                                   method='median')
+            threshold = B1bkg.background + 3.0*B1bkg.background_rms
 
-                # Build a mask for any sources above the 3-sigma threshold
-                sigma  = 2.0 * gaussian_fwhm_to_sigma    # FWHM = 2.
-                kernel = Gaussian2DKernel(sigma, x_size=6, y_size=6)
-                segm   = detect_sources(Bimg.arr, threshold,
-                                      npixels=5, filter_kernel=kernel)
-                # Build the actual mask and include a step to capture negative
-                # saturation values
-                mask   = np.logical_or((segm.data > 0),
-                         (np.abs((Bimg.arr -
-                          B1bkg.background)/B1bkg.background_rms) > 7.0))
+            # Build a mask for any sources above the 3-sigma threshold
+            sigma  = 2.0 * gaussian_fwhm_to_sigma    # FWHM = 2.
+            kernel = Gaussian2DKernel(sigma, x_size=6, y_size=6)
+            kernel.normalize()
+            segm   = detect_sources(Bimg.arr, threshold,
+                                  npixels=5, filter_kernel=kernel)
+            # Build the actual mask and include a step to capture negative
+            # saturation values
+            mask   = np.logical_or((segm.data > 0),
+                     (np.abs((Bimg.arr -
+                      B1bkg.background)/B1bkg.background_rms) > 7.0))
 
-                # Estimate a 2D background image masking possible sources
-                B1bkg = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
-                                       method='median', mask=mask)
+            # Estimate a 2D background image masking possible sources
+            B1bkg = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
+                                   method='median', mask=mask)
 
-                # Catch any non-finite values and "mask" them with -1e6 value
-                nanInds = np.where(np.logical_not(np.isfinite(Aimg.arr)))
-                Aimg.arr[nanInds] = -1e6
+            # Catch all the NaN values from masking the optical ghosts
+            ghostMask    = np.logical_not(np.isfinite(Aimg.arr))
+            ghostMaskImg = Aimg.copy()
+            ghostMaskImg.arr = ghostMask
+            maskImgList.append(ghostMaskImg)
 
-                # Catch saturated negative values
-                badInds = np.where(Aimg.arr < -3*read_noise/effective_gain)
-                Aimg.arr[badInds] = np.NaN
+            # Catch any non-finite values and "mask" them with -1e6 value
+            # These will be caught in the next step and reset to NaNs
+            nanInds = np.where(ghostMask)
+            Aimg.arr[nanInds] = -1e6
 
-                # Perform the actual background subtraction
-                Aimg.arr  = Aimg.arr - B1bkg.background
+            # Catch saturated negative values
+            badInds = np.where(Aimg.arr < -3*read_noise/effective_gain)
+            Aimg.arr[badInds] = np.NaN
 
-                # Append the background subtracted image to the list
-                sciImgList.append(Aimg.copy())
+            # Perform the actual background subtraction
+            Aimg.arr  = Aimg.arr - B1bkg.background
 
-            # Now that all the backgrounds have been subtracted,
-            # let's align the images and compute an average image
-            # TODO Should I use "cross-correlation" alignment?
-            sciImgList = image_tools.align_images(sciImgList, padding=-1e6)
-            avgImg     = image_tools.combine_images(sciImgList, output = 'MEAN',
-                effective_gain = effective_gain,
-                read_noise = read_noise)
+            # Append the background subtracted image to the list
+            sciImgList.append(Aimg.copy())
+
+
+        # Now that all the backgrounds have been subtracted,
+        # let's align the images and compute an average image
+        # TODO Should I use "cross-correlation" alignment?
+        sciImgList  = image_tools.align_images(sciImgList, padding=np.NaN)
+        avgImg      = image_tools.combine_images(sciImgList, output = 'MEAN',
+            effective_gain = effective_gain,
+            read_noise = read_noise)
 
     else:
         # Handle HEX-DITHERS images
         # (mostly for calibration images as of now)
-
+        continue
+        ##### The Indexing Program should parse hex pointing positions, too.
         # Test if numImgs matches the ABBA pattern
         if (numImgs % 6) != 0:
             print('The HEX dither pattern is not there...')
@@ -233,10 +232,6 @@ for group in fileIndexByTarget.groups:
     # Solve the stacked image astrometry
     avgImg1, success = image_tools.astrometry(tmpImg)
 
-    # Re-assign the uncertainty array to the output image
-    if hasattr(avgImg, 'sigma'):
-        avgImg1.sigma = avgImg.sigma
-
     # With successful astrometry, save result to disk
     if success:
         print('astrometry succeded')
@@ -252,6 +247,24 @@ for group in fileIndexByTarget.groups:
             os.system('rm none')
         if os.path.isfile('tmp.fits'):
             os.system('rm tmp.fits')
+
+        # Now that astrometry has been solved, let's make sure to go through and
+        # mask out all pixels with zero samples.
+        maskImgList = image_tools.align_images(maskImgList, padding=np.NaN)
+        maskCount   = np.zeros(maskImgList[0].arr.shape, dtype=int)
+        for mask in maskImgList:
+            maskCount += mask.arr.astype(int)
+
+        # Blank out pixels which were masked in all images
+        maskInds = np.where(maskCount == len(maskImgList))
+        tmpArr = avgImg.arr.copy()
+        tmpArr[maskInds] = np.NaN
+        avgImg1.arr = tmpArr
+
+        if hasattr(avgImg, 'sigma'):
+            tmpSig = avgImg.sigma.copy()
+            tmpSig[maskInds] = np.NaN
+            avgImg1.sigma = tmpSig
 
         # Save the file to disk
         avgImg1.write(outFile)

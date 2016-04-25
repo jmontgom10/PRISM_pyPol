@@ -278,7 +278,7 @@ brushSize = 3      # (5xbrushSize pix) is the size of the region masked
 # 2. Waveband
 # 3. Dither (pattern)
 # 4. Polaroid Angle
-fileIndexByTarget = fileIndex.group_by(['Dither', 'Target', 'Waveband', 'Polaroid Angle'])
+fileIndexByTarget = fileIndex.group_by(['Dither', 'Target', 'Waveband', 'Pol Ang'])
 
 # Identify the "ON" and "OFF" images for each group,
 # and generate a final list of images that need masking

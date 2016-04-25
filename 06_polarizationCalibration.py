@@ -165,11 +165,11 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
 
             # Initalize an empty dictionary for storing polAng AstroImage objects
             polAngImgs = dict()
-            indexTargetWavePolAng = indexTargetWave.group_by(['Polaroid Angle'])
+            indexTargetWavePolAng = indexTargetWave.group_by(['Pol Ang'])
             for polAng in indexTargetWavePolAng.groups:
                 # Loop through each of the polAng images,
                 # and check which polarization standards are common to them all
-                thisPolAng = str(np.unique(polAng['Polaroid Angle'].data)[0])
+                thisPolAng = str(np.unique(polAng['Pol Ang'].data)[0])
 
                 # Read in the current polAng image
                 inFile = os.path.join(polAngDir,
