@@ -1,0 +1,29 @@
+Notes on priors for photometric calibration fits.
+
+** OBJECT: M104 ***
+
+bounds1 = [(-0.1, +np.pi/2),# Theta (angle of the line slope)
+           (0.0, 25.0),     # b_perp (min-dist(line-origin))
+           (0.0, 1.0),      # Pb (Probability of sampling an outliers)
+           (-8.0, +8.0),    # Mx (<x> of outlier distribution)
+           (-2.0, 5.0),     # lnVx (log-x-variance of outlier distribution)
+           (-8.0, +8.0),    # My (<y> of outlier distribution)
+           (-2.0, 5.0)]     # lnVy (log-y-variance of outlier distribution)
+
+bounds2 = [(+0.5, +1.5),    # Theta (angle of the line slope)
+           (0.0, 24.0),     # b_perp (min-dist(line-origin))
+           (0.0, 1.0),      # Pb (Probability of sampling an outliers)
+           (-8.0, +8.0),    # Mx (<x> of outlier distribution)
+           (-2.0, 5.0),     # lnVx (log-x-variance of outlier distribution)
+           (-8.0, +8.0),    # My (<y> of outlier distribution)
+           (-2.0, 5.0)]     # lnVy (log-y-variance of outlier distribution)
+
+boundsC = [(+0.32, +1.0),   # Theta (angle of the line slope)
+           (-0.4, +0.4),    # b_perp (min-dist(line-origin))
+           (0.0, 1.0),      # Pb (Probability of sampling an outliers)
+           (-8.0, +8.0),    # Mx (<x> of outlier distribution)
+           (-2.0, 5.0),     # lnVx (log-x-variance of outlier distribution)
+           (-8.0, +8.0),    # My (<y> of outlier distribution)
+           (-2.0, 5.0)]     # lnVy (log-y-variance of outlier distribution)
+
+*** OBJECT: M78 ***

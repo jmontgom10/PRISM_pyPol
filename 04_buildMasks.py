@@ -32,10 +32,6 @@ targets = ['NGC2023', 'NGC7023', 'NGC1977', 'M78']
 # This is the location of the pyBDP processed Data
 pyBDP_reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
 
-# Read in the indexFile data and select the filenames
-indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
-fileIndex = Table.read(indexFile, format='csv')
-
 # Setup new directory for polarimetry data
 maskDir = os.path.join(pyPol_data, 'Masks')
 if (not os.path.isdir(maskDir)):
@@ -44,7 +40,7 @@ if (not os.path.isdir(maskDir)):
 # Read in the indexFile data and select the filenames
 print('\nReading file index from disk')
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
-fileIndex = Table.read(indexFile, format='csv')
+fileIndex = Table.read(indexFile, format='ascii.csv')
 
 # Determine which parts of the fileIndex pertain to science images
 useFiles = np.logical_and(fileIndex['Use'] == 1,

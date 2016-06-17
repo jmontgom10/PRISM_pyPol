@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on Sat Aug 29 17:03:39 2015
+
 @author: jordan
 """
 
@@ -50,7 +51,7 @@ effective_gain = 3.3 # electrons/ADU
 # Read in the indexFile data and select the filenames
 print('\nReading file index from disk')
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
-fileIndex = Table.read(indexFile, format='csv')
+fileIndex = Table.read(indexFile, format='ascii.csv')
 
 # Determine which parts of the fileIndex pertain to science images
 useFiles = np.where(fileIndex['Use'] == 1)
@@ -89,29 +90,41 @@ for group in fileIndexByTarget.groups:
     print('\tPolaroid Angle : {0}'.format(thisPolAng))
 
     # Read in the files of this group
-    imgList    = []
-    for file1 in group['Filename']:
-        tmpImg  = AstroImage(file1)
+    imgList  = []
+    bkgTable = Table(names=('Night', 'Time', 'Bkg'), dtype=('i8','f8','f8'))
+    for row in group:
+        if row['ABBA'] == 'A':
+            # Read on-target image into imgList
+            file1 = row['Filename']
+            tmpImg  = AstroImage(file1)
 
-        # Test if this file has an associated mask
-        maskFile = os.path.join(maskDir,os.path.basename(file1))
-        if os.path.isfile(maskFile):
-            # Read in any associated mask and add it to the arr attribute
-            tmpMask = AstroImage(maskFile)
+            # Test if this file has an associated mask
+            maskFile = os.path.join(maskDir,os.path.basename(file1))
+            if os.path.isfile(maskFile):
+                # Read in any associated mask and add it to the arr attribute
+                tmpMask = AstroImage(maskFile)
 
-            # Mask the image by setting masked values to "np.NaN"
-            tmpImg.arr[np.where(tmpMask.arr == 1)] = np.NaN
+                # Mask the image by setting masked values to "np.NaN"
+                tmpImg.arr[np.where(tmpMask.arr == 1)] = np.NaN
 
-        # Grab the polaroid angle position from the header
-        polPos = str(tmpImg.header['POLPOS'])
+            # Grab the polaroid angle position from the header
+            polPos = str(tmpImg.header['POLPOS'])
 
-        # Check that the polPos value is correct
-        if polPos != thisPolAng:
-            print('Image polaroid angle does not match expected value')
+            # Check that the polPos value is correct
+            if polPos != thisPolAng:
+                print('Image polaroid angle does not match expected value')
+                pdb.set_trace()
+
+            # If everything seems ok, then add this to the imgList
+            imgList.append(tmpImg)
+        elif row['ABBA'] == 'B':
+            # Read off-target background level and store in an astropy Table
+            thisNight = row['Night']
+            thisDate  = tmpImg.header['DATE'].split('T')[1]
             pdb.set_trace()
+            thisTime  = datetime.strptime(thisDate, '%Y-%m-%d')
+            # bkgTable.add_row()
 
-        # If everything seems ok, then add this to the imgList
-        imgList.append(tmpImg)
 
     # Cleanup temporary variables
     del tmpImg
@@ -160,6 +173,12 @@ for group in fileIndexByTarget.groups:
             # Catch all the NaN values from masking the optical ghosts
             ghostMask    = np.logical_not(np.isfinite(Aimg.arr))
             ghostMaskImg = Aimg.copy()
+
+            # Wipe out the sigma attribute if its there (we won't need it)
+            if hasattr(ghostMaskImg, 'sigma'):
+                del ghostMaskImg.sigma
+
+            # Store the ghostMask for this image and append to the list
             ghostMaskImg.arr = ghostMask
             maskImgList.append(ghostMaskImg)
 
@@ -229,41 +248,33 @@ for group in fileIndexByTarget.groups:
     tmpImg.write()
 
     # Solve the stacked image astrometry
-    avgImg1, success = image_tools.astrometry(tmpImg)
+    avgImg1, success = image_tools.astrometry(tmpImg, override = True)
 
     # With successful astrometry, save result to disk
     if success:
         print('astrometry succeded')
 
-        # Clean up temporary variable
+        # Clean up temporary files
+        # TODO update to by system independent
+        # (use subprocess module and "del" command for Windows)
+        # See AstroImage.astrometry for example
+
         del tmpImg
 
-        # Delete the temporary file
-        # Test what kind of system is running
-        if 'win' in sys.platform:
-            # If running in Windows,
-            delCmd = 'del '
-            shellCmd = True
-        else:
-            # If running a *nix system,
-            delCmd = 'rm '
-            shellCmd = False
-
-        # Finally delete the temporary fits file
-        tmpFile = os.path.join(os.getcwd(), 'tmp.fits')
-        rmProc = subprocess.Popen(delCmd + tmpFile, shell=shellCmd)
-        rmProc.wait()
-        rmProc.terminate()
+        if os.path.isfile('none'):
+            os.system('rm none')
+        if os.path.isfile('tmp.fits'):
+            os.system('rm tmp.fits')
 
         # Now that astrometry has been solved, let's make sure to go through and
         # mask out all pixels with zero samples.
-        maskImgList = image_tools.align_images(maskImgList, padding=np.NaN)
+        maskImgList = image_tools.align_images(maskImgList, padding=True)
         maskCount   = np.zeros(maskImgList[0].arr.shape, dtype=int)
         for mask in maskImgList:
             maskCount += mask.arr.astype(int)
 
         # Blank out pixels which were masked in all images
-        maskInds = np.where(maskCount == len(maskImgList))
+        maskInds = np.where((maskCount >= (len(maskImgList) - 2)))
         tmpArr = avgImg.arr.copy()
         tmpArr[maskInds] = np.NaN
         avgImg1.arr = tmpArr

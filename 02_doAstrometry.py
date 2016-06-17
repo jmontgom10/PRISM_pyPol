@@ -33,7 +33,7 @@ pyBDP_reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
 
 # Read in the indexFile data and select the filenames
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
-fileIndex = Table.read(indexFile, format='csv')
+fileIndex = Table.read(indexFile, format='ascii.csv')
 fileList  = fileIndex['Filename']
 
 # Loop through each file and perform its astrometry method

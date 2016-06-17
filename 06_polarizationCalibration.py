@@ -77,12 +77,12 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
     # Read in the indexFile data and select the filenames
     print('\nReading file index from disk')
     indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
-    fileIndex = Table.read(indexFile, format='csv')
+    fileIndex = Table.read(indexFile, format='ascii.csv')
 
     # Read in the polarization standards file
     print('Reading polarization standards from disk')
     polStandardFile = os.path.join('polStandards.csv')
-    polStandards = Table.read(polStandardFile, format='csv')
+    polStandards = Table.read(polStandardFile, format='ascii.csv')
 
     ra1      = polStandards['RA'].data
     dec1     = polStandards['Dec'].data
@@ -472,14 +472,14 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
     # Now that ALL the data have been processed....
     # Write the results to disk for future reference
     print('Saving polarization table to disk')
-    polStandardTable_R.write(RtableFile, format='csv')
-    polStandardTable_V.write(VtableFile, format='csv')
+    polStandardTable_R.write(RtableFile, format='ascii.csv')
+    polStandardTable_V.write(VtableFile, format='ascii.csv')
 
 else:
     # If the tables are already on disk, then just read them in and execute the
     # calibration script portion of the script
-    polStandardTable_V = Table.read(VtableFile, format='csv')
-    polStandardTable_R = Table.read(RtableFile, format='csv')
+    polStandardTable_V = Table.read(VtableFile, format='ascii.csv')
+    polStandardTable_R = Table.read(RtableFile, format='ascii.csv')
 
 # Build a quick Table to store the calibration results
 calTable = Table(names=('Waveband', 'PE', 's_PE', 'PAsign', 'dPA', 's_dPA'),
@@ -1028,6 +1028,6 @@ else:
     plt.ioff()
 
 print('Writing calibration data to disk')
-calTable.write(calDataFile, format='csv')
+calTable.write(calDataFile, format='ascii.csv')
 
 print('Calibration tasks completed!')

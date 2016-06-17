@@ -47,11 +47,11 @@ if (not os.path.isdir(stokesDir)):
 # Read in the indexFile data and select the filenames
 print('\nReading file index from disk')
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
-fileIndex = Table.read(indexFile, format='csv')
+fileIndex = Table.read(indexFile, format='ascii.csv')
 
 print('\nReading calibration constants from disk')
 calTableFile = os.path.join(pyPol_data, 'calData.csv')
-calTable = Table.read(calTableFile, format='csv')
+calTable = Table.read(calTableFile, format='ascii.csv')
 
 # Determine which parts of the fileIndex pertain to science images
 useFiles = np.logical_and((fileIndex['Use'] == 1), (fileIndex['Dither'] == 'ABBA'))
@@ -64,13 +64,6 @@ fileIndex = fileIndex[np.where(useFiles)]
 # 2. Waveband
 # 3. Dither (pattern)
 fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither'])
-
-# Define any required conversion constants
-rad2deg = (180.0/np.pi)
-deg2rad = (np.pi/180.0)
-# wavebands = ('R', 'V')
-# deltaPA = (16.0*deg2rad, 19.0*deg2rad) #degrees converted into radians
-# deltaPA = dict(zip(wavebands, deltaPA))
 
 # Loop through each group
 groupKeys = fileIndexByTarget.groups.keys
@@ -134,7 +127,10 @@ for group in fileIndexByTarget.groups:
 
     # Use the "align_stack" method to align the newly created image list
     print('\nAligning images\n')
-
+    # import matplotlib.pyplot as plt
+    # plt.ion()
+    # plt.imshow(maskImgs[0].sigma)
+    # pdb.set_trace()
     if ((thisTarget in wcsAlignmentDict) and
         (thisWaveband in wcsAlignmentDict[thisTarget])):
         # Use WCS method to align images
@@ -202,8 +198,8 @@ for group in fileIndexByTarget.groups:
     stokesQ.header = stokesI.header
 
     # Mask out masked values
-    Qmask = np.logical_or(polAngImgs[0].arr   == 0,
-                          polAngImgs[400].arr == 0)
+    Qmask = np.logical_or(np.isnan(polAngImgs[0].arr),
+                          np.isnan(polAngImgs[400].arr))
 
     #**********************************************************************
     # Stokes U
@@ -219,8 +215,8 @@ for group in fileIndexByTarget.groups:
     stokesU.header = stokesI.header
 
     # Mask out zero values
-    Umask = np.logical_or(polAngImgs[200].arr == 0,
-                          polAngImgs[600].arr == 0)
+    Umask = np.logical_or(np.isnan(polAngImgs[200].arr),
+                          np.isnan(polAngImgs[600].arr))
 
     #**********************************************************************
     # Calibration

@@ -13,14 +13,16 @@ astropy, and matplotlib preinstalled. If you elect not to use Anaconda, then
 make sure to get those packages properly installed before proceeding to install
 the AstroImage dependencies.
 
-You will also need to install the `photutils` package for Python. This can be
-done via anaconda
+You will also need to install the `photutils` (and optional `astroquery` package
+for photometric calibration) for Python. This can be done via anaconda
 
 `conda install --channel https://conda.anaconda.org/astropy photutils`
+`conda install -c astropy astroquery`
 
 or pip (if you did not elect to install Anaconda)
 
 `pip install --no-deps photutils`
+`pip install astroquery`
 
 This script package is written for Python 3 and is not compatible with Python 2.
 
@@ -155,14 +157,7 @@ and run it through a python interpreter.
 The following procedure is used to compute the average images.
 
 1. The off (B) positions from the ABBA dither observational procedure are used
-to generate a smoothed average background image. The smoothing process uses a
-non-normalized Gaussian shaped kernel, so if you see warnings stating
-
-```
-WARNING: The kernel is not normalized. [photutils.utils.convolution]
-```
-
-those can be safely ignored.
+to generate a smoothed average background image.
 
 2. The smoothed background images are subtracted from the on (A) positions.
 
@@ -201,6 +196,26 @@ the necessary subtraction and division methods to compute polarization
 percentage and polarization position angle maps for the extended emission in
 each image.
 
-This script should
+This script should ???
 
-## 08_photometricCalibration
+## 08a_selectPhotStars.py
+
+Automatically retrieves USNO-B1.0 data from Vizier service.
+
+Displays stars on top of mean V- and R-band image (cropped to the region common
+to *both* bands).
+
+User selects which stars are isolated and clearly identified in the USNO-B1.0
+catalog. These will be saved for use in the V- and R-band photometric
+calibration.
+
+## 08b_photometricCalibration.py
+
+For V-band references, use the APASS data, which includes a direct measure of
+the Johnson_V-band photometry across most of the sky. APASS data can be
+downloaded from https://www.aavso.org/download-apass-data.
+
+For R-band references, use the USNO-B1.0 data, which contains R1 and R2 "red
+magnitude" estimates, which closely approximate the Johnson_R-band. The
+USNO-B1.0 data can be retrieved from
+http://www.usno.navy.mil/USNO/astrometry/optical-IR-prod/icas/fchpix.
