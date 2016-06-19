@@ -126,7 +126,6 @@ for group in fileIndexByTarget.groups:
     # Grab the current target information
     thisTarget   = str(np.unique(group['Target'].data)[0])
 
-    if thisTarget != 'NGC1977': continue
 
     print('\nProcessing images for {0}'.format(thisTarget))
 
@@ -569,7 +568,6 @@ for group in fileIndexByTarget.groups:
         #     print(printStr.format(x = xVal, y = yVal, star = starVal,
         #         bkg = bkgVal, snr = snrVal))
 
-
     # I need to simultaneously solve a set of linear regressions for photometric
     # zero-point magnitudes and color correction terms
     #
@@ -845,15 +843,6 @@ for group in fileIndexByTarget.groups:
             n_burn_in_steps=n_burn_in_steps,
             n_steps=n_steps)
 
-        # Plot the posteriors to see if a reasonable result was obtained.
-        plt.ion()
-        plotSamples = sampler1.flatchain[:,plotInds]
-        plotBounds  = np.array(bounds1)[plotInds]
-        corner.corner(plotSamples, bins=100,
-            range=plotBounds,
-            labels=plotLabels)
-        pdb.set_trace()
-        plt.close('all')
 
         # Compute the posterior probability that each data-point is "good"
         norm = 0.0
