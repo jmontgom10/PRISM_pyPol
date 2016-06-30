@@ -27,6 +27,7 @@ from AstroImage import AstroImage
 # with the "cross_correlate" alignment method, so use "wcs" method instead
 wcsAlignmentDict = {'NGC7023': ('V', 'R'),
                     'NGC2023': ('V', 'R')}
+wcsAlignmentDict = {}
 
 # This is the location where all pyPol data will be saved
 pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
@@ -74,14 +75,13 @@ for group in fileIndexByTarget.groups:
     thisRow      = np.where(calTable['Waveband'] == thisWaveband)
     numImgs      = len(group)
 
-    if thisTarget != 'NGC2023': continue
+    if thisTarget != 'M82': continue
 
     print('\nProcessing images for'.format(numImgs))
     print('\tTarget   : {0}'.format(thisTarget))
     print('\tWaveband : {0}'.format(thisWaveband))
 
     # Read in the polAng image
-    fileCheck  = True
     polAngImgs = []
     maskImgs   = []
     polAngs    = []
@@ -97,66 +97,53 @@ for group in fileIndexByTarget.groups:
             # Find the masked pixels for this image and store them
             maskArr = (np.logical_not(np.isfinite(polAngImg.arr))).astype(int)
             maskImg = polAngImg.copy()
+            maskImg.arr = maskArr
 
-            # If there are masked pixels, then handle them
-            if np.sum(maskArr) > 0:
-                # # Locate the masked pixels
-                # # goodInds = np.where(np.logical_not(maskArr))
-                # maskInds = np.where(maskArr)
-                #
-                # # Inpaint the screwed up pixels
-                # polAngImg.arr[maskInds] = np.NaN
-                # # polAngImg.arr = image_tools.inpaint_nans(polAngImg.arr)
-                #
-                # maskImg.arr   = polAngImg.arr
-                maskImg.sigma = maskArr
-            else:
-                maskImg.sigma = maskArr
+            # Remove unnecessary 'sigma' array
+            if hasattr(maskImg, 'sigma'):
+                del maskImg.sigma
 
             # Append the values to their lists
             polAngs.append(polAng)
             polAngImgs.append(polAngImg)
             maskImgs.append(maskImg)
         else:
-            fileCheck = False
-
-    # Check that all the necessarry files are present
-    if not fileCheck:
-        print("\tSome required Polaroid Angle files are missing.")
-        continue
+            print("\tSome required Polaroid Angle files are missing.")
+            continue
 
     # Use the "align_stack" method to align the newly created image list
     print('\nAligning images\n')
-    # import matplotlib.pyplot as plt
-    # plt.ion()
-    # plt.imshow(maskImgs[0].sigma)
-    # pdb.set_trace()
+
     if ((thisTarget in wcsAlignmentDict) and
         (thisWaveband in wcsAlignmentDict[thisTarget])):
-        # Use WCS method to align images
-        polAngImgs = image_tools.align_images(polAngImgs,
-            mode='wcs', subPixel=True, padding=np.NaN)
+        # Use WCS method to compute image offsets
+        imgOffsets = image_tools.get_image_offsets(polAngImgs,
+            mode='wcs', subPixel=True)
 
-        # Repeat the alignment on the images which have the mask stored in the
-        # sigma attribute. This sholud allow us to RE-MASK after alignment
+        # Use the image offsets to align both the polAngImgs and the maskImgs
+        polAngImgs = image_tools.align_images(polAngImgs,
+            offsets=imgOffsets, subPixel=True, padding=np.NaN)
+
         alignedMaskImgs = image_tools.align_images(maskImgs,
-            mode='wcs', subPixel=True, padding=1)
+            offsets=imgOffsets, subPixel=True, padding=1)
     else:
         # Otherwise use cross_correlate method (more accurate if it works)
-        polAngImgs = image_tools.align_images(polAngImgs,
-            mode='cross_correlate', subPixel=True, padding=np.NaN)
+        imgOffsets = image_tools.get_image_offsets(polAngImgs,
+            mode='cross_correlate', subPixel=True)
 
-        # Repeat the alignment on the images which have the mask stored in the
-        # sigma attribute. This sholud allow us to RE-MASK after alignment
+        # Use the image offsets to align both the polAngImgs and the maskImgs
+        polAngImgs = image_tools.align_images(polAngImgs,
+            offsets=imgOffsets, subPixel=True, padding=np.NaN)
+
         alignedMaskImgs = image_tools.align_images(maskImgs,
-            mode='cross_correlate', subPixel=True, padding=1)
+            offsets=imgOffsets, subPixel=True, padding=1)
 
     # Replace the masked pixels in the "arr" attribute with NaNs
     for imgNum in range(len(alignedMaskImgs)):
         # Copy the image and look for masked pixels
         tmpImg   = polAngImgs[imgNum].copy()
         tmpMask  = alignedMaskImgs[imgNum].copy()
-        maskInds = np.where(tmpMask.sigma > 0)
+        maskInds = np.where(tmpMask.arr > 0)
 
         # If some pixels are masked, replace them with NaN
         if len(maskInds[0]) > 0:
@@ -179,6 +166,7 @@ for group in fileIndexByTarget.groups:
     stokesI = 2 * stokesI
 
     # Perform astrometry to apply to the headers of all the other images...
+    stokesI.clear_astrometry()
     stokesI, success = image_tools.astrometry(stokesI)
 
     # Check if astrometry solution was successful

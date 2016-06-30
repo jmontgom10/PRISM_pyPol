@@ -141,14 +141,31 @@ for group in fileIndexByTarget.groups:
     Ifile  = os.path.join(stokesDir, thisTarget + '*I.fits')
     Ifiles = glob.glob(Ifile)
 
+    # Search for all the Stokes U images
+    Ufile  = os.path.join(stokesDir, thisTarget + '*U.fits')
+    Ufiles = glob.glob(Ufile)
+
+    # Search for all the Stokes Q images
+    Qfile  = os.path.join(stokesDir, thisTarget + '*Q.fits')
+    Qfiles = glob.glob(Qfile)
+
     # Read in all the Stokes Images found  for this target, and strip the
     # waveband from the header of each
     stokesIimgs = [AstroImage(file1) for file1 in Ifiles]
     waveBands   = [img.header['FILTNME3'].strip() for img in stokesIimgs]
 
-    # Compose a dictionary of stokes I images
+    # Read in the Stokes U images
+    stokesUimgs = [AstroImage(file1) for file1 in Ufiles]
+
+    # Read in the Stokes Q images
+    stokesQimgs = [AstroImage(file1) for file1 in Qfiles]
+
+    # Compose a dictionary of stokes I, U, and Q images
     stokesIdict = dict(zip(waveBands, stokesIimgs))
-    del stokesIimgs, waveBands
+    stokesUdict = dict(zip(waveBands, stokesUimgs))
+    stokesQdict = dict(zip(waveBands, stokesQimgs))
+
+    del stokesIimgs, stokesUimgs, stokesQimgs, waveBands
 
     # Grab the WCS info from the header of the stokes Images
     wcsDict = dict()
@@ -508,7 +525,8 @@ for group in fileIndexByTarget.groups:
         # entry with a semi-unique 'Star ID'
         # Extract the star positions from the photometry table
         # (this is redundant but a nice confirmation that these will be right)
-        xStars, yStars = phot_table['xcenter_raw'].data, phot_table['ycenter_raw'].data
+        xStars = phot_table['xcenter_raw'].data
+        yStars = phot_table['ycenter_raw'].data
 
         # Initalize an empty list to store the starIDs
         starIDs = -1*np.ones(len(phot_table), dtype=int)
@@ -1112,6 +1130,12 @@ for group in fileIndexByTarget.groups:
         img1 = stokesIdict_AMC[band1]
         img2 = stokesIdict_AMC[band2]
 
+        # Grab the U and Q images, too...
+        Qimg1 = stokesQdict[band1]
+        Qimg2 = stokesQdict[band2]
+        Uimg1 = stokesUdict[band1]
+        Uimg2 = stokesUdict[band2]
+
         # Make copies of these images to track the image footprint
         img1a = img1.copy()
         img2a = img2.copy()
@@ -1124,12 +1148,19 @@ for group in fileIndexByTarget.groups:
 
         # Store a simple map containing the image footprint
         # Before the images are aligned, this is simply an array of ones
-        img1a.arr = np.ones(img1a.arr.shape, dtype=int)
-        img2a.arr = np.ones(img2a.arr.shape, dtype=int)
+        img1a.arr = np.ones(img1.arr.shape, dtype=int)
+        img2a.arr = np.ones(img2.arr.shape, dtype=int)
 
         # Align the two images and "pixel-footprint" copy
-        alignedImgs    = img1.align(img2)
-        alignedPixMaps = img1a.align(img2a)
+        # Start by determining the sub-pixel accurate image offsets
+        imgOffsets     = img1.get_img_offsets(img2,
+            subPixel=True, mode='cross_correlate')
+
+        # Apply the determined image offsets to the I, Q, U images and pix maps
+        alignedImgs    = img1.align(img2, subPixel=True, offsets=imgOffsets)
+        alignedQimgs   = Qimg1.align(Qimg2, subPixel=True, offsets=imgOffsets)
+        alignedUimgs   = Uimg1.align(Uimg2, subPixel=True, offsets=imgOffsets)
+        alignedPixMaps = img1a.align(img2a, subPixel=True, offsets=imgOffsets)
         pixelCountImg  = np.sum(alignedPixMaps)
 
         # Grab the image center pixel coordinates
@@ -1145,8 +1176,12 @@ for group in fileIndexByTarget.groups:
 
         # Now the the crop boundaries have been determined, apply the crop to
         # the aligned images
-        img1 = alignedImgs[0].crop(lf, rt, bt, tp, copy=True)
-        img2 = alignedImgs[1].crop(lf, rt, bt, tp, copy=True)
+        img1  = alignedImgs[0].crop(lf, rt, bt, tp, copy=True)
+        img2  = alignedImgs[1].crop(lf, rt, bt, tp, copy=True)
+        Qimg1 = alignedQimgs[0].crop(lf, rt, bt, tp, copy=True)
+        Qimg2 = alignedQimgs[1].crop(lf, rt, bt, tp, copy=True)
+        Uimg1 = alignedUimgs[0].crop(lf, rt, bt, tp, copy=True)
+        Uimg2 = alignedUimgs[1].crop(lf, rt, bt, tp, copy=True)
 
         # Compute the flux ratio, fix negative values, and convert to colors
         fluxRatio = img1/img2
@@ -1237,136 +1272,24 @@ for group in fileIndexByTarget.groups:
         img2aCalFile = os.path.join(stokesDir, img2aCalFile)
         img2a.write(img2aCalFile)
 
+        Qimg1CalFile = '_'.join([thisTarget, band1, 'Q', 'cal']) + '.fits'
+        Qimg1CalFile = os.path.join(stokesDir, Qimg1CalFile)
+        Qimg1.write(Qimg1CalFile)
+
+        Qimg2CalFile = '_'.join([thisTarget, band2, 'Q', 'cal']) + '.fits'
+        Qimg2CalFile = os.path.join(stokesDir, Qimg2CalFile)
+        Qimg2.write(Qimg2CalFile)
+
+        Uimg1CalFile = '_'.join([thisTarget, band1, 'U', 'cal']) + '.fits'
+        Uimg1CalFile = os.path.join(stokesDir, Uimg1CalFile)
+        Uimg1.write(Uimg1CalFile)
+
+        Uimg2CalFile = '_'.join([thisTarget, band2, 'U', 'cal']) + '.fits'
+        Uimg2CalFile = os.path.join(stokesDir, Uimg2CalFile)
+        Uimg2.write(Uimg2CalFile)
+
         colorFile = '_'.join([thisTarget, band1+'-'+band2]) + '.fits'
         colorFile = os.path.join(stokesDir, colorFile)
         calColor.write(colorFile)
-
-    # # Compute the average USNOB-1.0 magnitude for the given waveband
-    # if thisWaveband == 'V':
-    #     # Predict V-band magnitudes
-    #     V1mags = USNOB_V1(Omags, Emags)
-    #     V2mags = USNOB_V2(Jmags, Fmags)
-    #
-    #     # # Quick-test: plot V1mags vs. V2mags
-    #     # plt.ion()
-    #     # fig = plt.figure()
-    #     # ax  = fig.add_subplot(1,1,1)
-    #     # ax.errorbar(V1mags[0], V2mags[0],
-    #     #     xerr=V1mags[1], yerr=V2mags[1],
-    #     #     fmt=",k", ms=0, capsize=0, lw=1, zorder=999)
-    #     #
-    #     # # Draw the slpoe = 1 line
-    #     # xmin, xmax, _, _ = ax.axis()
-    #     # ax.autoscale(False)
-    #     # ax.plot([xmin, xmax], [xmin, xmax], 'k')
-    #     #
-    #     # pdb.set_trace()
-    #     # plt.close()
-    #
-    #     # Convert these independent V-band magnitudes into a single V-band
-    #     # Ignore uncertainties until we've gotten them properly done.
-    #     V1flux = 10**(-0.4*V1mags[0])
-    #     V2flux = 10**(-0.4*V2mags[0])
-    #     # sigV2flux =
-    #     # sigV1flux =
-    #
-    #     # Compute an average flux
-    #     Vflux = 0.5*(V1flux + V2flux)
-    #
-    #     # Convert the flux back into a magnitude and store it in the "catMags"
-    #     # variable, which will be used below to fit for the zero-point magnitude
-    #     catMags = -2.5*np.log10(Vflux)
-    #
-    # if thisWaveband == 'R':
-    #     # Predict R-band magnitudes
-    #     R1mags = USNOB_R1(Omags, Emags)
-    #     R2mags = USNOB_R2(Jmags, Fmags)
-    #
-    #     # # Quick-test: plot R1mags vs. R2mags
-    #     # plt.ion()
-    #     # fig = plt.figure()
-    #     # ax  = fig.add_subplot(1,1,1)
-    #     # ax.errorbar(R1mags[0], R2mags[0],
-    #     #     xerr=R1mags[1], yerr=R2mags[1],
-    #     #     fmt=",k", ms=0, capsize=0, lw=1, zorder=999)
-    #     #
-    #     # # Draw the slpoe = 1 line
-    #     # xmin, xmax, _, _ = ax.axis()
-    #     # ax.autoscale(False)
-    #     # ax.plot([xmin, xmax], [xmin, xmax], 'k')
-    #     #
-    #     # pdb.set_trace()
-    #     # plt.close()
-    #
-    #     # Convert these independent V-band magnitudes into a single V-band
-    #     # Ignore uncertainties until we've gotten them properly done.
-    #     R1flux = 10**(-0.4*R1mags[0])
-    #     R2flux = 10**(-0.4*R2mags[0])
-    #     # sigV2flux =
-    #     # sigV1flux =
-    #
-    #     # Compute an average flux
-    #     Rflux = 0.5*(R1flux + R2flux)
-    #
-    #     # Convert the flux back into a magnitude and store it in the "catMags"
-    #     # variable, which will be used below to fit for the zero-point magnitude
-    #     catMags = -2.5*np.log10(Rflux)
-    #
-    # # Do a linear fit between the instrumental and catalog magnitudes
-    # instMags    = -2.5*np.log10(phot_table['residual_aperture_sum'].data)
-    # sigInstMags = np.abs((2.5/np.log(10)) *
-    #     (phot_table['residual_aperture_sum_err'].data /
-    #      phot_table['residual_aperture_sum'].data))
-    #
-    # # # Define the model to be used in the fitting
-    # # def lineFunc(B, x):
-    # #      return B[0]*x + B[1]
-    # #
-    # # # Set up ODR with the model and data.
-    # # lineModel = odr.Model(lineFunc)
-    # # data = odr.Data(instMags, catMags)
-    # # odr1 = odr.ODR(data, lineModel, beta0=[1., 0.0], ifixb=[0,1])
-    # #
-    # # # Run the regression.
-    # # out = odr1.run()
-    # #
-    # # # Use the in-built pprint method to give us results.
-    # # out.pprint()
-    #
-    # # Plot the best fitting line
-    # plt.ion()
-    # fig = plt.figure()
-    # ax  = fig.add_subplot(1,1,1)
-    # ax.scatter(instMags, catMags, c='black', marker='+')
-    # ax.set_xlabel('Instrumental Magnitudes')
-    # ax.set_ylabel('USNO-B1.0 Magnitudes')
-    #
-    # # overplot the best fitting line
-    # xmin, xmax, _, _ = ax.axis()
-    # ax.autoscale(False)
-    # ax.plot([xmin, xmax], lineFunc(out.beta, np.array([xmin, xmax])), 'k')
-    # pdb.set_trace()
-    # plt.close('all')
-    #
-    # # Grab the zero-point magnitude
-    # zpMags      =  catMags - instMags
-    # zpMag, _, _ = sigma_clipped_stats(zpMags)
-    # print('zero-point magnitude = {0:4.3}'.format(out.beta[1]))
-    #
-    # # Perform the final conversion to Jy/arcsec^2
-    # pixel_area = proj_plane_pixel_area(wcs)*(3600**2)
-    # BUNIT      = 'uJy/sqarcs'
-    # BSCALE     = zeroFlux[thisWaveband]*(1e6)*(10.0**(-0.4*zpMag))/(pixel_area)
-    # BZERO      = 0.0
-    #
-    # stokesI.header.set('BUNIT', value = BUNIT,
-    #            comment='Physical units for the image')
-    # stokesI.header.set('BSCALE', value = BSCALE, after='BUNIT',
-    #            comment='Conversion factor for physical units', )
-    # stokesI.header.set('BZERO', value = BZERO, after='BSCALE',
-    #            comment='Zero level for the physical units.')
-    #
-    # # Finally write the updated header to disk
-    # stokesI.write(calImgName)
 
 print('Done!')

@@ -6,13 +6,17 @@ Created on Sat Aug 29 17:03:39 2015
 
 import os
 import sys
+from datetime import datetime
+import warnings
 import numpy as np
 from astropy.io import ascii
 from astropy.table import Table as Table
 from astropy.table import Column as Column
 from astropy.convolution import Gaussian2DKernel
-from astropy.stats import gaussian_fwhm_to_sigma
+from astropy.modeling import models, fitting
+from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
 from photutils import detect_sources, Background
+import subprocess
 import pdb
 
 # Add the AstroImage class
@@ -128,15 +132,46 @@ for group in fileIndexByTarget.groups:
         Aimgs = imgList[Ainds]
         Bimgs = imgList[Binds]
 
-        # Loop through each pair and bild a bg-subtracted list
-        maskImgList = []
-        sciImgList  = []
-        for pairNum, ABimg in enumerate(zip(Aimgs, Bimgs)):
-            Aimg = ABimg[0]
-            Bimg = ABimg[1]
-            print('\t\tProcessing on-off pair {0}'.format(pairNum+1))
+        # Setup some initial time to compute relative observation times
+        dt0 = datetime(2000,1,1,0,0,0)
 
-            # Estimate the background for this pair
+        # Loop through all "on-target" images and grab the observation time and
+        # background sky count levels
+        Atimes = []
+        Abkgs = []
+        maskImgList = []
+        for Aimg in Aimgs:
+            # Catch all the NaN values from masking the optical ghosts
+            ghostMask    = np.logical_not(np.isfinite(Aimg.arr))
+            ghostMaskImg = Aimg.copy()
+            ghostMaskImg.arr = ghostMask
+            maskImgList.append(ghostMaskImg)
+
+            # Compute the image statistics and store them
+            goodVals = np.isfinite(Aimg.arr)
+            if np.sum(goodVals) > 0:
+                goodInds = np.where(goodVals)
+                mean, median, std = sigma_clipped_stats(Aimg.arr[goodInds])
+                Abkgs.append(median)
+            else:
+                print('There are no good pixels in this on-target image...')
+                pdb.set_trace()
+
+            # Compute the relative observation time and store it
+            dt = datetime.strptime(Aimg.header['date-obs'][0:19], '%Y-%m-%dT%H:%M:%S')
+            Atimes.append((dt - dt0).total_seconds())
+
+        # Convert maskImgList into an array
+        maskImgs = np.array(maskImgList)
+
+        # Loop through the background images and compute the background images,
+        # observation times, and background sky count levels
+        print('\tComputing average normalized background image')
+        Btimes = []
+        Bbkgs = []
+        bkgImgs = []
+        for Bimg in Bimgs:
+            # Estimate the background for this off-target image
             B1bkg     = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
                                    method='median')
             threshold = B1bkg.background + 3.0*B1bkg.background_rms
@@ -157,33 +192,100 @@ for group in fileIndexByTarget.groups:
             B1bkg = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
                                    method='median', mask=mask)
 
-            # Catch all the NaN values from masking the optical ghosts
-            ghostMask    = np.logical_not(np.isfinite(Aimg.arr))
-            ghostMaskImg = Aimg.copy()
-            ghostMaskImg.arr = ghostMask
-            maskImgList.append(ghostMaskImg)
+            # Store the *NORMALIZED* background image and statistics statistics.
+            bkgImgs.append(B1bkg.background/B1bkg.background_median)
+            Bbkgs.append(B1bkg.background_median)
+
+            # Compute the relative observation time and store it
+            dt = datetime.strptime(Bimg.header['date-obs'][0:19], '%Y-%m-%dT%H:%M:%S')
+            Btimes.append((dt - dt0).total_seconds())
+
+        # Compute average *NORMALIZED* background image
+        bkgImgs = np.array(bkgImgs)
+        bkgImg  = np.mean(bkgImgs, axis=0)
+
+        # Adjust the Btimes to be *JUST* barely positive
+        t0      = np.min(Atimes) - 10
+        Atimes -= t0
+        Btimes -= t0
+
+        # Perform the least squares fit to the background levels
+        # Initalize a set of models to fit and a fitting object
+        powerLaw_init  = models.PowerLaw1D(amplitude=1.0, x_0=1.0, alpha=-1.0)
+        line_init      = models.Polynomial1D(1)
+        compModel_init = line_init + powerLaw_init
+        fitter         = fitting.LevMarLSQFitter()
+
+        with warnings.catch_warnings():
+            # Ignore warning from the fitter
+            warnings.simplefilter("ignore")
+            bkgModel = fitter(compModel_init, Btimes, Bbkgs)
+
+        # import matplotlib.pyplot as plt
+        # plt.ion()
+        # plt.scatter(Atimes, Abkgs, c='blue')
+        # plt.scatter(Btimes, Bbkgs, c='red')
+        # plt.title('PolAng = {0}'.format(thisPolAng))
+        # plt.autoscale(False)
+        #
+        # # Generate an array of interpolate times...
+        # trange = np.max(plt.xlim()) - np.min(plt.xlim())
+        # t_tmp  = trange*np.linspace(0,1,100) + np.min(plt.xlim())
+        # plt.plot(t_tmp, bkgModel(t_tmp))
+        # plt.savefig(thisPolAng+'.png')
+        # pdb.set_trace()
+        # continue
+
+        # Cut out any Aimgs with approximate residual levels more than 3-sigma
+        # from the median.
+        AbkgResid = bkgModel(Atimes) - Abkgs
+        goodVals  = np.abs((AbkgResid - np.median(AbkgResid))/np.std(AbkgResid)) < 2.0
+        if np.sum(goodVals) > 0:
+            keepInds    = np.where(goodVals)
+            Aimgs1      = Aimgs[keepInds]
+            Atimes1     = Atimes[keepInds]
+            maskImgList = list(maskImgs[keepInds])
+            mean_bkg    = np.mean((bkgModel(Atimes))[keepInds])
+        else:
+            print('No interpolated background levels are acceptable...')
+            pdb.set_trace()
+
+        # Loop through each preserved "on-target" image and compute the
+        # background subtracted "scienc-image"
+        print('Subtracting background levels from on-target images')
+        sciImgList = []
+        for Aimg, Atime, maskImg in zip(Aimgs1, Atimes1, maskImgList):
+            # Make a copy of the "on-target" imge to manipulate
+            Atmp = Aimg.copy()
 
             # Catch any non-finite values and "mask" them with -1e6 value
             # These will be caught in the next step and reset to NaNs
-            nanInds = np.where(ghostMask)
-            Aimg.arr[nanInds] = -1e6
+            nanInds = np.where(maskImg.arr)
+            Atmp.arr[nanInds] = -1e6
 
             # Catch saturated negative values
-            badInds = np.where(Aimg.arr < -3*read_noise/effective_gain)
-            Aimg.arr[badInds] = np.NaN
+            badInds = np.where(Atmp.arr < -3*read_noise/effective_gain)
+            Atmp.arr[badInds] = np.NaN
 
-            # Perform the actual background subtraction
-            Aimg.arr  = Aimg.arr - B1bkg.background
+            # Perform the actual background subtraction by scaling the average
+            # *NORMALIZED* background image to the interpolated background level
+            Atmp.arr = Atmp.arr - bkgModel(Atime)*bkgImg
 
             # Append the background subtracted image to the list
-            sciImgList.append(Aimg.copy())
-
+            sciImgList.append(Atmp.copy())
 
         # Now that all the backgrounds have been subtracted,
         # let's align the images and compute an average image
         # TODO Should I use "cross-correlation" alignment?
-        sciImgList  = image_tools.align_images(sciImgList, padding=np.NaN)
-        avgImg      = image_tools.combine_images(sciImgList, output = 'MEAN',
+        sciImgList  = image_tools.align_images(
+            sciImgList,
+            padding=np.NaN,
+            mode='cross_correlate',
+            subPixel=True)
+        avgImg = image_tools.combine_images(
+            sciImgList,
+            output = 'MEAN',
+            mean_bkg = mean_bkg,
             effective_gain = effective_gain,
             read_noise = read_noise)
 
@@ -214,10 +316,15 @@ for group in fileIndexByTarget.groups:
             effective_gain = effective_gain,
             read_noise = read_noise)
 
+    print('\tRe-solve the average image astrometry.')
     # It is only possible to "redo the astrometry" if the file on the disk
     # First make a copy of the average image
     tmpImg = avgImg.copy()
-    # Replace NaNs with something finite and name the file "tmp.fits"
+
+    # Clear the astrometry values from the header
+    tmpImg.clear_astrometry()
+
+    # ReplaceNaNs with something finite and name the file "tmp.fits"
     tmpImg.arr = np.nan_to_num(tmpImg.arr)
     tmpImg.filename = 'tmp.fits'
 
@@ -251,7 +358,7 @@ for group in fileIndexByTarget.groups:
 
         # Finally delete the temporary fits file
         tmpFile = os.path.join(os.getcwd(), 'tmp.fits')
-        rmProc = subprocess.Popen(delCmd + tmpFile, shell=shellCmd)
+        rmProc  = subprocess.Popen(delCmd + tmpFile, shell=shellCmd)
         rmProc.wait()
         rmProc.terminate()
 
@@ -262,16 +369,23 @@ for group in fileIndexByTarget.groups:
         for mask in maskImgList:
             maskCount += mask.arr.astype(int)
 
-        # Blank out pixels which were masked in all images
-        maskInds = np.where(maskCount == len(maskImgList))
+        # Make copies of the image array
         tmpArr = avgImg.arr.copy()
-        tmpArr[maskInds] = np.NaN
-        avgImg1.arr = tmpArr
+        tmpSig = avgImg.sigma.copy()
 
-        if hasattr(avgImg, 'sigma'):
-            tmpSig = avgImg.sigma.copy()
-            tmpSig[maskInds] = np.NaN
-            avgImg1.sigma = tmpSig
+        # Blank out pixels which were masked in all images
+        maskPix  = (maskCount == len(maskImgList))
+        if np.sum(maskPix) > 0:
+            maskInds = np.where(maskPix)
+            tmpArr[maskInds] = np.NaN
+
+            # Replace the sigma array
+            if hasattr(avgImg, 'sigma'):
+                tmpSig[maskInds] = np.NaN
+
+        # Replace the image array
+        avgImg1.arr   = tmpArr
+        avgImg1.sigma = tmpSig
 
         # Save the file to disk
         avgImg1.write(outFile)
