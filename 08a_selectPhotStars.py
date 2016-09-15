@@ -259,73 +259,9 @@ for group in fileIndexByTarget.groups:
         keepStars2,
         np.logical_not(starCatalog['R2mag'].mask))
 
-    #### THIS NEXT REQUIREMEN IS TOO RESTRICTIVE... NOT ENOUGH STARS! ####
-    # Also eliminate any stars with warning flags (not genuine USNO-B1.0)
-    # keepStars = np.logical_and(
-    #     keepStars,
-    #     starCatalog['Flags'].data.data == b'...')
-
     # Keep any stars from which we can generate at least ONE photometry estimate
     keepStarsList = [keepStars1, keepStars2]
 
-    # # Get the image PSF properties
-    # # Initalize a 2D gaussian model and fitter
-    # g_init = models.Gaussian2D(amplitude = 1e3,
-    #                            x_mean = 10.0,
-    #                            y_mean = 10.0,
-    #                            x_stddev = 3.0,
-    #                            y_stddev = 3.0,
-    #                            theta = 0.0)
-    # fit_g = fitting.LevMarLSQFitter()
-    #
-    # # Compute sky statistics for detecting stellar sources
-    # sourcesList = []
-    # FWHMlist    = []
-    # fwhm        = 3.0
-    # # Loop through each image and find stars for that image
-    # for img in alignedImgs:
-    #     mean, median, std = sigma_clipped_stats(img.arr, sigma=3.0, iters=5)
-    #     threshold = median + 20.0*std
-    #     # Find the location of bright stars in the image
-    #     sources = daofind(img.arr, threshold, fwhm, ratio=1.0, theta=0.0,
-    #                       sigma_radius=1.5, sharplo=0.2, sharphi=1.0,
-    #                       roundlo=-1.0, roundhi=1.0, sky=0.0,
-    #                       exclude_border=True)
-    #
-    #     # # Append the threshold and star table to their lists
-    #     # sourcesList.append(sources)
-    #     #
-    #     xs, ys = sources['xcentroid'], sources['ycentroid']
-    #     # Store the FWHMs in this list
-    #     starFWHMs = []
-    #     for xs1, ys1 in zip(xs, ys):
-    #         # Grab the patch centered on this star
-    #         lf, rt = np.int(xs1.round()) - 10, np.int(xs1.round()) + 10
-    #         bt, tp = np.int(ys1.round()) - 10, np.int(ys1.round()) + 10
-    #         patch  = img.arr[bt:tp, lf:rt]
-    #
-    #         with warnings.catch_warnings():
-    #             # Ignore model linearity warning from the fitter
-    #             warnings.simplefilter('ignore')
-    #             yy, xx = np.mgrid[0:patch.shape[0], 0:patch.shape[1]]
-    #             g_fit  = fit_g(g_init, xx, yy, patch)
-    #
-    #         thisXY    = (g_fit.x_mean.value, g_fit.y_mean.value)
-    #         thisSigma = np.sqrt(g_fit.x_stddev.value*g_fit.y_stddev.value)
-    #         thisFWHM  = thisSigma/gaussian_fwhm_to_sigma
-    #
-    #         # Store the FWHM
-    #         starFWHMs.append(thisFWHM)
-    #
-    #     # This is not an awesome solution (should really select a subset of "PSF
-    #     # stars" to use, but this will suffice for now).
-    #     meanFWHM, medFWHM, stddev = sigma_clipped_stats(starFWHMs)
-    #     FWHMlist.append(medFWHM)
-    #
-    # # Compute the maximum FWHM from the images
-    # medianFWHM = np.max(FWHMlist)
-    # apRad      = 2*medianFWHM
-    # apertures  = CircularAperture([xStars, yStars], r = apRad)
     apRad      = 8.0
 
 

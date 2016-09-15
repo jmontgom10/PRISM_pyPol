@@ -1212,7 +1212,10 @@ for group in fileIndexByTarget.groups:
         rhosmsb   = covC[0,1]
         sig_Color = np.sqrt(sig_m2*(instColor.arr**2) + sig_b2
             + 2*rhosmsb*instColor.arr + instColor.sigma**2)
-        calColor = truthsC[1] + truthsC[0]*instColor
+
+        # Compute the calibrated color image and replace the simple uncertainty
+        # with the full blown uncertainty...
+        calColor = truthsC[1] + truthsC[0]*instColor.arr
         calColor.sigma = sig_Color
 
         # Now that the color-map has been computed, apply the calibration
