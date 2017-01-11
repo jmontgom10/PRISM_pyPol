@@ -167,7 +167,9 @@ possible to use a cross-correlation process to align the images before
 averaging. The cross-correlation process would run *much* slower.
 
 4. The aligned images are averaged (rejecting outliers along the way) to produce
-a single output image for each waveband/polaroid-angle pair.
+a single output image for each polaroid-angle (in near future: aligned across
+all available wavebands s that all images of that target will be aligned
+regardless of the waveband.)
 
 5. The astrometry of the averaged image is solved using Astrometry.net and saved
 to disk. See my instructions for [Windows

@@ -19,8 +19,7 @@ from matplotlib import pyplot as plt
 import pdb
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage
+from astroimage.astroimage import AstroImage
 
 # This script will run the image averaging step of the pyPol reduction
 

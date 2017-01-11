@@ -27,9 +27,7 @@ import corner
 import pdb
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-import image_tools
-from AstroImage import AstroImage
+from astroimage.astroimage import AstroImage
 
 # This is the location where all pyPol data will be saved
 pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
@@ -168,7 +166,7 @@ for group in fileIndexByTarget.groups:
     del stokesIimgs, stokesUimgs, stokesQimgs, waveBands
 
     # Grab the WCS info from the header of the stokes Images
-    wcsDict = dict()
+    wcsDict   = {}
     yr2000    = datetime(2000,1,1)
     deltaTime = timedelta(0)
     for key, img in stokesIdict.items():

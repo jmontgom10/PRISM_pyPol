@@ -12,8 +12,8 @@ from astropy.table import Column as Column
 import pdb
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage
+from astroimage.astroimage import AstroImage
+from astroimage import utils
 
 # This script will run the astrometry step of the pyPol reduction
 
@@ -39,10 +39,10 @@ fileList  = fileIndex['Filename']
 # Loop through each file and perform its astrometry method
 for file in fileList:
     # Read in the file
-    tmpImg  = AstroImage(file)
+    tmpImg = AstroImage(file)
 
     # Do the astrometry with Atrometry.net
-    success = tmpImg.astrometry()
+    tmpImg, success = utils.solve_astrometry(tmpImg)
     if success:
         # If the astrometry was solved, then proceed to write the astro
         tmpImg.write()

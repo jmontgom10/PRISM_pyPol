@@ -28,9 +28,8 @@ from photutils import daofind, aperture_photometry, CircularAperture, CircularAn
 import pdb
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-import image_tools
-from AstroImage import AstroImage
+from astroimage.astroimage import utils
+from astroimage.astroimage import AstroImage
 
 # This is the location where all pyPol data will be saved
 pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
@@ -199,7 +198,7 @@ for group in fileIndexByTarget.groups:
     # Resolve the astrometry
     stokesI1.filename='tmp.fits'
     stokesI1.write()
-    stokesI, success = image_tools.astrometry(stokesI1)
+    stokesI, success = utils.solve_astrometry(stokesI1)
     if success:
         # Grab the WCS of this file
         thisWCS = WCS(stokesI.header)

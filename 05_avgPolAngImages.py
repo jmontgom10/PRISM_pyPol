@@ -20,9 +20,8 @@ import subprocess
 import pdb
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage
-import image_tools
+from astroimage.astroimage import utils
+from astroimage.astroimage import AstroImage
 
 # This script will run the image averaging step of the pyPol reduction
 
@@ -33,7 +32,7 @@ import image_tools
 #==============================================================================
 
 # This is the location where all pyPol data will be saved
-pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
+pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data\\201501'
 
 # This is the location of the previously generated masks (step 4)
 maskDir = os.path.join(pyPol_data, 'Masks')
@@ -67,330 +66,392 @@ fileIndex = fileIndex[useFiles]
 # 2. Waveband
 # 3. Dither (pattern)
 # 4. Polaroid Angle
-fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither', 'Pol Ang'])
+fileIndexByTarget = fileIndex.group_by(['Target', 'Waveband', 'Dither'])
 
 # Loop through each group
 groupKeys = fileIndexByTarget.groups.keys
 for group in fileIndexByTarget.groups:
-    # Grab the current target information
+    # Grab the current group information
     thisTarget   = str(np.unique(group['Target'].data)[0])
     thisWaveband = str(np.unique(group['Waveband'].data)[0])
-    thisPolAng   = str(np.unique(group['Pol Ang'].data)[0])
+    thisDither   = str(np.unique(group['Dither'].data)[0])
 
-    # Test if this target-waveband-polAng combo was previously processed
-    outFile = os.path.join(polAngDir,
-        '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits')
+    # Grab all the unique polaroid angle values reperesented within this group.
+    polAngs = np.unique(group['Pol Ang'].data)
 
-    if os.path.isfile(outFile):
-        print('File ' + '_'.join([thisTarget, thisWaveband, thisPolAng]) +
-              ' already exists... skipping to next group')
-        continue
+    # Loop through the polAngs and check if these images have already been done
+    fileCount = 0
+    for polAng in polAngs:
+        # Test if this target-waveband-polAng combo was previously processed
+        testFile = '_'.join([thisTarget, thisWaveband, str(polAng)])
+        testPath = os.path.join(polAngDir, testFile) + '.fits'
 
-    numImgs      = len(group)
-    print('\nProcessing {0} images for'.format(numImgs))
-    print('\tTarget         : {0}'.format(thisTarget))
-    print('\tWaveband       : {0}'.format(thisWaveband))
-    print('\tPolaroid Angle : {0}'.format(thisPolAng))
+        if os.path.isfile(testPath):
+            print('File ' + testFile + ' already exists...')
+            fileCount += 1
 
-    # Read in the files of this group
-    imgList    = []
-    for file1 in group['Filename']:
-        tmpImg  = AstroImage(file1)
+    # If all four polaroid angle images have been processed, then simply skip
+    # this target/waveband combination for now
+    if fileCount > 3: continue
 
-        # Test if this file has an associated mask
-        maskFile = os.path.join(maskDir,os.path.basename(file1))
-        if os.path.isfile(maskFile):
-            # Read in any associated mask and add it to the arr attribute
-            tmpMask = AstroImage(maskFile)
+    # Temporarily skip everything other than M82...
+    if thisTarget != 'M82': continue
 
-            # Mask the image by setting masked values to "np.NaN"
-            tmpImg.arr[np.where(tmpMask.arr == 1)] = np.NaN
+    # Update the user on processing status
+    print('\nProcessing images for')
+    print('Target   : {0}'.format(thisTarget))
+    print('Waveband : {0}'.format(thisWaveband))
+    print('Dither   : {0}'.format(thisDither))
 
-        # Grab the polaroid angle position from the header
-        polPos = str(tmpImg.header['POLPOS'])
+    # Initalize a dictionary in which to store the lists of polAng images to be
+    # combined and their background levels, too.
+    polAngDict = {'images':[], 'background_levels':[]}
+    groupDict  = {
+        0:   polAngDict.copy(),
+        200: polAngDict.copy(),
+        400: polAngDict.copy(),
+        600: polAngDict.copy()
+    }
 
-        # Check that the polPos value is correct
-        if polPos != thisPolAng:
-            print('Image polaroid angle does not match expected value')
-            pdb.set_trace()
+    # Test which kind of dither we're dealing with and handle accordingly
+    if thisDither == "ABBA":
+        # Now break the TARGET group up by its individual observational groupings
+        indexBySubGroup = group.group_by(['Name'])
 
-        # If everything seems ok, then add this to the imgList
-        imgList.append(tmpImg)
+        # In the following loop through each polaroid rotation anglue, we
+        # will test for sunrise and sunset powerlaws in the background
+        # levels of each polAng set. If the sun is setting, then a
+        # decreasing power law (alpha = -1) should fit the data well. If the
+        # sun is rising, then an increasing power law (alpha = +1) should
+        # fit the data well.
 
-    # Cleanup temporary variables
-    del tmpImg
+        # Initalize sunset power law for model fitting
+        sunsetPowerLaw_init = models.PowerLaw1D(
+            amplitude=1.0,
+            x_0=1.0,
+            alpha=-1.0)
 
-    # Convert the image list into an indexable array
-    imgList = np.array(imgList)
+        # Initalize sunrise power law for model fitting
+        sunrisePowerLaw_init = models.PowerLaw1D(
+            amplitude=1.0,
+            x_0=1.0,
+            alpha=+1.0)
 
-    # Process images in this group according to dither type
-    ditherType = np.unique(group['Dither'].data)
-    if ditherType == "ABBA":
-        # Break the images up into "on-target" / "off-target" image lists
-        Ainds = np.where(group['ABBA'].data == 'A')[0]
-        Binds = np.where(group['ABBA'].data == 'B')[0]
-        Aimgs = imgList[Ainds]
-        Bimgs = imgList[Binds]
+        # Initalize linear polynomial variation in background values
+        line_init = models.Polynomial1D(1)
+
+        # Initalize model fitter for use
+        fitter = fitting.LevMarLSQFitter()
 
         # Setup some initial time to compute relative observation times
         dt0 = datetime(2000,1,1,0,0,0)
 
-        # Loop through all "on-target" images and grab the observation time and
-        # background sky count levels
-        Atimes = []
-        Abkgs = []
-        maskImgList = []
-        for Aimg in Aimgs:
-            # Catch all the NaN values from masking the optical ghosts
-            ghostMask    = np.logical_not(np.isfinite(Aimg.arr))
-            ghostMaskImg = Aimg.copy()
-            ghostMaskImg.arr = ghostMask
-            maskImgList.append(ghostMaskImg)
+        # Loop through each observational grouping. This allows the time-varying
+        # background to be estimated using only data closely spaced in time.
+        # Trying to parse all the data for each target/waveband combination
+        # simultaneously would not result in accurate background estimations.
+        subGroupKeys = indexBySubGroup.groups.keys
+        for subGroup in indexBySubGroup.groups:
+            # Update the user on the current execution status
+            thisSubGroup = str(np.unique(subGroup['Name'])[0])
+            print('\tProcessing background levels for subgroup {0}'.format(thisSubGroup))
 
-            # Compute the image statistics and store them
-            goodVals = np.isfinite(Aimg.arr)
-            if np.sum(goodVals) > 0:
-                goodInds = np.where(goodVals)
-                mean, median, std = sigma_clipped_stats(Aimg.arr[goodInds])
-                Abkgs.append(median)
-            else:
-                print('There are no good pixels in this on-target image...')
-                pdb.set_trace()
+            # For an ABBA dither, we need to treat each polAng value separately.
+            # Start by breaking the subGroup up into its constituent polAngs
+            indexByPolAng  = subGroup.group_by(['Pol Ang'])
 
-            # Compute the relative observation time and store it
-            dt = datetime.strptime(Aimg.header['date-obs'][0:19], '%Y-%m-%dT%H:%M:%S')
-            Atimes.append((dt - dt0).total_seconds())
+            # Loop through each polAng subset of the subGroup
+            polAngGroupKeys = indexByPolAng.groups.keys
+            for polAngGroup in indexByPolAng.groups:
+                # Update the user on processing status
+                thisPolAng = str(np.unique(polAngGroup['Pol Ang'])[0])
+                print('\t\tPolaroid Angle : {0}'.format(thisPolAng))
 
-        # Convert maskImgList into an array
-        maskImgs = np.array(maskImgList)
+                # Initalize temporary lists to hold the images, times, etc....
+                Aimgs       = []
+                Atimes      = []
+                AmedBkgs    = []
+                Btimes      = []
+                BmedBkgs    = []
+                bkgImgs     = []
+                AinterpVals = []
 
-        # Loop through the background images and compute the background images,
-        # observation times, and background sky count levels
-        print('\tComputing average normalized background image')
-        Btimes = []
-        Bbkgs = []
-        bkgImgs = []
-        for Bimg in Bimgs:
-            # Estimate the background for this off-target image
-            B1bkg     = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
-                                   method='median')
-            threshold = B1bkg.background + 3.0*B1bkg.background_rms
+                # Loop through each row of the polAng group, read in the images,
+                # grab the observation times, estimate the background levels,
+                # estimate the median, normalized, background images, and
+                # perform the model fitting and interpolated on-target
+                # background levels
+                progressString = '\t\t\t Images: '
+                for row in polAngGroup:
+                    # Read in a temporary compy of this image
+                    file1  = row['Filename']
+                    tmpImg = AstroImage(file1)
 
-            # Build a mask for any sources above the 3-sigma threshold
-            sigma  = 2.0 * gaussian_fwhm_to_sigma    # FWHM = 2.
-            kernel = Gaussian2DKernel(sigma, x_size=6, y_size=6)
-            kernel.normalize()
-            segm   = detect_sources(Bimg.arr, threshold,
-                                  npixels=5, filter_kernel=kernel)
-            # Build the actual mask and include a step to capture negative
-            # saturation values
-            mask   = np.logical_or((segm.data > 0),
-                     (np.abs((Bimg.arr -
-                      B1bkg.background)/B1bkg.background_rms) > 7.0))
+                    # Compute the relative observation time and store it
+                    dt = datetime.strptime(tmpImg.header['date-obs'][0:19],
+                        '%Y-%m-%dT%H:%M:%S')
 
-            # Estimate a 2D background image masking possible sources
-            B1bkg = Background(Bimg.arr, (100, 100), filter_shape=(3, 3),
-                                   method='median', mask=mask)
+                    # Treat the "on-target" files
+                    if row['ABBA'] == 'A':
+                        progressString += 'A'
+                        print(progressString, end="\r")
 
-            # Store the *NORMALIZED* background image and statistics statistics.
-            bkgImgs.append(B1bkg.background/B1bkg.background_median)
-            Bbkgs.append(B1bkg.background_median)
+                        # Add the unaltered image to the Aimg list
+                        Aimgs.append(tmpImg)
 
-            # Compute the relative observation time and store it
-            dt = datetime.strptime(Bimg.header['date-obs'][0:19], '%Y-%m-%dT%H:%M:%S')
-            Btimes.append((dt - dt0).total_seconds())
+                        # Test if this file has an associated mask
+                        maskFile = os.path.join(maskDir, os.path.basename(file1))
+                        if os.path.isfile(maskFile):
+                            # Read in any associated mask
+                            tmpMask = AstroImage(maskFile)
 
-        # Compute average *NORMALIZED* background image
-        bkgImgs = np.array(bkgImgs)
-        bkgImg  = np.mean(bkgImgs, axis=0)
+                            # If there are some bad pixels to mask....
+                            if np.sum(tmpMask.arr) > 0:
+                                # Replace those pixels with nans
+                                tmpImg.arr[np.where(tmpMask.arr)] = np.nan
 
-        # Adjust the Btimes to be *JUST* barely positive
-        t0      = np.min(Atimes) - 10
-        Atimes -= t0
-        Btimes -= t0
+                        # Store the relative observing time in the Atimes list
+                        Atimes.append((dt - dt0).total_seconds())
 
-        # Perform the least squares fit to the background levels
-        # Initalize a set of models to fit and a fitting object
-        powerLaw_init  = models.PowerLaw1D(amplitude=1.0, x_0=1.0, alpha=-1.0)
-        line_init      = models.Polynomial1D(1)
-        compModel_init = line_init + powerLaw_init
-        fitter         = fitting.LevMarLSQFitter()
+                        # Compute the image statistics and store them
+                        goodPix= np.isfinite(tmpImg.arr)
+                        if np.sum(goodPix) > 0:
+                            goodInds = np.where(goodPix)
+                            mean, median, std = sigma_clipped_stats(
+                                tmpImg.arr[goodInds])
+                            AmedBkgs.append(median)
+                        else:
+                            print('There are no good pixels in this on-target image...')
+                            pdb.set_trace()
 
-        with warnings.catch_warnings():
-            # Ignore warning from the fitter
-            warnings.simplefilter("ignore")
-            bkgModel = fitter(compModel_init, Btimes, Bbkgs)
+                    if row['ABBA'] == 'B':
+                        progressString += 'B'
+                        print(progressString, end="\r")
 
-        # import matplotlib.pyplot as plt
-        # plt.ion()
-        # plt.scatter(Atimes, Abkgs, c='blue')
-        # plt.scatter(Btimes, Bbkgs, c='red')
-        # plt.title('PolAng = {0}'.format(thisPolAng))
-        # plt.autoscale(False)
-        #
-        # # Generate an array of interpolate times...
-        # trange = np.max(plt.xlim()) - np.min(plt.xlim())
-        # t_tmp  = trange*np.linspace(0,1,100) + np.min(plt.xlim())
-        # plt.plot(t_tmp, bkgModel(t_tmp))
-        # plt.savefig(thisPolAng+'.png')
-        # pdb.set_trace()
-        # continue
+                        # Store the relative observing time in the Btimes list
+                        Btimes.append((dt - dt0).total_seconds())
 
-        # Cut out any Aimgs with approximate residual levels more than 3-sigma
-        # from the median.
-        AbkgResid = bkgModel(Atimes) - Abkgs
-        goodVals  = np.abs((AbkgResid - np.median(AbkgResid))/np.std(AbkgResid)) < 2.0
-        if np.sum(goodVals) > 0:
-            keepInds    = np.where(goodVals)
-            Aimgs1      = Aimgs[keepInds]
-            Atimes1     = Atimes[keepInds]
-            maskImgList = list(maskImgs[keepInds])
-            mean_bkg    = np.mean((bkgModel(Atimes))[keepInds])
-        else:
-            print('No interpolated background levels are acceptable...')
-            pdb.set_trace()
+                        # Estimate the background for this off-target image
+                        B1bkg     = Background(tmpImg.arr, (100, 100),
+                            filter_shape=(3, 3),  method='median')
+                        threshold = B1bkg.background + 3.0*B1bkg.background_rms
 
-        # Loop through each preserved "on-target" image and compute the
-        # background subtracted "scienc-image"
-        print('Subtracting background levels from on-target images')
-        sciImgList = []
-        for Aimg, Atime, maskImg in zip(Aimgs1, Atimes1, maskImgList):
-            # Make a copy of the "on-target" imge to manipulate
-            Atmp = Aimg.copy()
+                        # Build a mask for any sources above the 3-sigma
+                        # threshold. Start by simply locating all ~2.0 pixel
+                        # gaussian sources.
+                        sigma  = 2.0 * gaussian_fwhm_to_sigma    # FWHM = 2.
+                        kernel = Gaussian2DKernel(sigma, x_size=6, y_size=6)
+                        kernel.normalize()
+                        segm   = detect_sources(tmpImg.arr, threshold,
+                                              npixels=5, filter_kernel=kernel)
 
-            # Catch any non-finite values and "mask" them with -1e6 value
-            # These will be caught in the next step and reset to NaNs
-            nanInds = np.where(maskImg.arr)
-            Atmp.arr[nanInds] = -1e6
+                        # Build the actual mask and include a step to capture
+                        # negative saturation values.
+                        mask   = np.logical_or((segm.data > 0),
+                                 (np.abs((tmpImg.arr -
+                                  B1bkg.background)/B1bkg.background_rms) > 7.0))
 
-            # Catch saturated negative values
-            badInds = np.where(Atmp.arr < -3*read_noise/effective_gain)
-            Atmp.arr[badInds] = np.NaN
+                        # Estimate a 2D background image masking possible
+                        # sources.
+                        B1bkg = Background(tmpImg.arr, (100, 100),
+                            filter_shape=(3, 3), method='median', mask=mask)
 
-            # Perform the actual background subtraction by scaling the average
-            # *NORMALIZED* background image to the interpolated background level
-            Atmp.arr = Atmp.arr - bkgModel(Atime)*bkgImg
+                        # Store the median background level for this image.
+                        BmedBkgs.append(B1bkg.background_median)
 
-            # Append the background subtracted image to the list
-            sciImgList.append(Atmp.copy())
+                        # Store the *NORMALIZED* background image.
+                        bkgImgs.append(B1bkg.background/B1bkg.background_median)
 
-        # Now that all the backgrounds have been subtracted,
-        # let's align the images and compute an average image
-        # TODO Should I use "cross-correlation" alignment?
-        sciImgList  = image_tools.align_images(
-            sciImgList,
+
+                # Print a single newline character to keep the progressString
+                print('')
+
+                # Now that we've looped through all the rows for this polAng
+                # part of the subGroup, compute an average of the normalized
+                # background images
+                bkgImgs = np.array(bkgImgs)
+                bkgImgs  = np.mean(bkgImgs, axis=0)
+                bkgImgs /= np.median(bkgImgs)
+
+                # Convert into an AstroImage object
+                bkgImg = Aimgs[0].copy()
+                bkgImg.arr = bkgImgs
+                del bkgImgs
+
+                # Next, let's test for various background level models.
+                # Grab the minimum observation time for all these images
+                minTime = np.min([np.min(Atimes), np.min(Btimes)])
+
+                # Use this as a fiducial time (plus 10 seconds to avoid power
+                # law singularities)
+                Atimes = np.array(Atimes) - minTime + 10
+                Btimes = np.array(Btimes) - minTime + 10
+
+                # Convert median background levels to arrays
+                AmedBkgs = np.array(AmedBkgs)
+                BmedBkgs = np.array(BmedBkgs)
+
+                # Perform the test fits ignoring some common warnings
+                with warnings.catch_warnings():
+                    # Ignore warning from the fitter
+                    warnings.simplefilter("ignore")
+                    sunsetFit  = fitter(sunsetPowerLaw_init, Btimes,
+                        BmedBkgs)
+                    sunriseFit = fitter(sunrisePowerLaw_init, Btimes,
+                        BmedBkgs)
+                    linearFit  = fitter(line_init, Btimes, BmedBkgs)
+
+                # Examine the fits to see if significant sunrise or senset found
+                sunsetTest = (sunsetFit.amplitude.value/np.median(BmedBkgs) > 1.0
+                    and sunsetFit.alpha.value < -0.9)
+                sunriseTest = (sunriseFit.amplitude.value/np.median(BmedBkgs) > 1.0
+                    and sunriseFit.alpha.value > +0.9)
+
+                # Test if only ONE of the two possibilities was detected. If
+                # both are false, then nothing is done
+                if sunsetTest != sunriseTest:
+                    # Now determine which one was present
+                    if sunsetTest:
+                        print('Detected sunset... subtracting')
+                        # Subtract sunset values from AmedBkgs and BmedBkgs
+                        AmedBkgs -= sunsetFit(Atimes)
+                        BmedBkgs -= sunsetFit(Btimes)
+                    elif sunriseTest:
+                        print('Detected sunrise... subtracting')
+                        # Subtract sunset values from AmedBkgs and BmedBkgs
+                        AmedBkgs -= sunriseFit(Atimes)
+                        BmedBkgs -= sunriseFit(Btimes)
+
+                # If both tests return True value, then issue an error and stop
+                if sunsetTest and sunriseTest:
+                    print('Detected both sunrise and setset.... not possible!')
+                    pdb.set_trace()
+
+                # Now that there is no sunrise or sunset in the background
+                # levels, simply perform direct linear interpolation or
+                # extrapolation to get the background level at the Atimes.
+                for iTime, Atime in enumerate(Atimes):
+                    # Test if this is the first or last image
+                    if ((Atime < np.min(Btimes)) or (Atime > np.max(Btimes))):
+                        AinterpVals.append(np.nan)
+
+                    # Otherwise it should have bounding neighbors, and
+                    # interpolation can be performed
+                    else:
+                        # Grab the times surrounding the current time
+                        ind0 = np.max(np.where(Btimes < Atime))
+                        ind1 = np.min(np.where(Btimes > Atime))
+
+                        # Grab the times and background levels for THIS
+                        # interpolation procedure
+                        Btime0 = Btimes[ind0]
+                        Btime1 = Btimes[ind1]
+                        Bbkg0  = BmedBkgs[ind0]
+                        Bbkg1  = BmedBkgs[ind1]
+
+                        # Solve for the slope and intercept
+                        thisSlope     = (Bbkg1 - Bbkg0)/(Btime1 - Btime0)
+                        thisIntercept = Bbkg0 - thisSlope*Btime0
+
+                        # Solve for the interpolated background level and store
+                        # it in the growing list
+                        Abkg = thisSlope*Atime + thisIntercept
+                        AinterpVals.append(Abkg)
+
+                # Now that all possible interpolations have been performed,
+                # compute a median difference between the measured and
+                # interpolated values.
+                AinterpVals = np.array(AinterpVals)
+                interpInds  = np.where(np.isfinite(AinterpVals))
+                diffVals    = AmedBkgs[interpInds] - AinterpVals[interpInds]
+                medDiff     = np.median(diffVals)
+
+                #
+                # Old method of KEEPING the interpolated values...
+                # This possible INTRODUCES as much error as it "repairs"
+                #
+                # # Now simply replace the uninterpolated values with the
+                # # difference between on-target and off-target background
+                # # estimates added to the median interpolated value
+                # nonInterpInds = np.where(np.isnan(AinterpVals))
+                # replaceVal    = AmedBkgs[nonInterpInds] - medDiff
+                # AinterpVals[nonInterpInds] = AmedBkgs[nonInterpInds] - medDiff
+                # AbkgVals = AinterpVals
+
+                # Now that we have an estimate of the median difference between
+                # the off-target background level and the on-target background
+                # level, simply estimate the true on-target background level as
+                # the measured on-target background level minus this difference
+                AbkgVals = AmedBkgs - medDiff
+
+                # Now that the background level has been estimated for the
+                # on-target observation times, loop through the on-target images
+                # and subtract a scaled, normalized background image
+
+                # Loop through the Aimgs list to apply the aperation
+                Aimgs = [Aimg - Abkg*bkgImg for Aimg, Abkg in zip(Aimgs, AbkgVals)]
+
+                # Build a dictionary containing the keys necessary to map into
+                # the groupDict dictionary
+                tmpDict = {
+                    'images': list(Aimgs),
+                    'background_levels': list(AbkgVals)
+                }
+
+                # Now that we have a set of background free images, store these in the
+                # groupDict variable for later use
+                polAngKey = int(thisPolAng)
+                for key, value in tmpDict.items():
+                    # Copy the original list of values
+                    tmpList = groupDict[polAngKey][key].copy()
+
+                    # Extend the list to include the new polAngDict values
+                    tmpList.extend(value)
+
+                    # Replace the groupDict value with the extended list
+                    groupDict[polAngKey][key] = tmpList
+
+    else:
+        # Treat the hex-dither images differently
+        pass
+
+    # Now that the groupDict variable contains ALL the information necessary for
+    # computing average polAng images, DO JUST THAT!
+
+    # Loop through groupDict keys, which are the polAng values
+    for polAng in groupDict.keys():
+        thisPolAng = str(polAng)
+        print('\tGenerating average image for')
+        print('\tPolaroid Angle : {0}'.format(thisPolAng))
+
+        # Align the images for addition (don't worry about sub-pixel alignment
+        # precision since we are not subtracting two images but adding them!)
+        alignedImgList = utils.align_images(
+            groupDict[polAng]['images'],
             padding=np.NaN,
-            mode='cross_correlate',
-            subPixel=True)
-        avgImg = image_tools.combine_images(
-            sciImgList,
+            mode='WCS',
+            subPixel=False)
+
+        # Compute the average image using the AstroImage "utilities"
+        combinedImg = utils.combine_images(
+            alignedImgList,
+            groupDict[polAng]['background_levels'],
             output = 'MEAN',
-            mean_bkg = mean_bkg,
             effective_gain = effective_gain,
             read_noise = read_noise)
 
-    else:
-        # Handle HEX-DITHERS images
-        # (mostly for calibration images as of now)
-        continue
-        ##### The Indexing Program should parse hex pointing positions, too.
-        # Test if numImgs matches the ABBA pattern
-        if (numImgs % 6) != 0:
-            print('The HEX dither pattern is not there...')
-            pdb.set_trace()
+        # Construct an image name and save to disk!
+        outputFile = '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits'
+        outputPath = os.path.join(polAngDir, outputFile)
+        combinedImg.clear_astrometry()
+        combinedImg.filename = outputPath
+        combinedImg.write()
 
-        # Now align and combine these images into a single average image
-        imgList = image_tools.align_images(imgList, padding=-1e6)
+        # Resolve the astrometry of this image
+        print('\tResolving astrometry...')
+        combinedImg, success = utils.solve_astrometry(combinedImg)
 
-        # Loop through and catch any pixels which need masking...
-        for img in imgList:
-            # Catch any non-finite values and "mask" them with -1e6 value
-            nanInds = np.where(np.logical_not(np.isfinite(img.arr)))
-            img.arr[nanInds] = -1e6
-
-            # Catch saturated negative values
-            badInds = np.where(img.arr < -3*read_noise/effective_gain)
-            img.arr[badInds] = np.NaN
-
-        avgImg  = image_tools.combine_images(imgList, output = 'MEAN',
-            effective_gain = effective_gain,
-            read_noise = read_noise)
-
-    print('\tRe-solve the average image astrometry.')
-    # It is only possible to "redo the astrometry" if the file on the disk
-    # First make a copy of the average image
-    tmpImg = avgImg.copy()
-
-    # Clear the astrometry values from the header
-    tmpImg.clear_astrometry()
-
-    # ReplaceNaNs with something finite and name the file "tmp.fits"
-    tmpImg.arr = np.nan_to_num(tmpImg.arr)
-    tmpImg.filename = 'tmp.fits'
-
-    # Delete the sigma attribute
-    if hasattr(tmpImg, 'sigma'):
-        del tmpImg.sigma
-
-    # Record the temporary file to disk for performing astrometry
-    tmpImg.write()
-
-    # Solve the stacked image astrometry
-    avgImg1, success = image_tools.astrometry(tmpImg)
-
-    # With successful astrometry, save result to disk
-    if success:
-        print('astrometry succeded')
-
-        # Clean up temporary variable
-        del tmpImg
-
-        # Delete the temporary file
-        # Test what kind of system is running
-        if 'win' in sys.platform:
-            # If running in Windows,
-            delCmd = 'del '
-            shellCmd = True
-        else:
-            # If running a *nix system,
-            delCmd = 'rm '
-            shellCmd = False
-
-        # Finally delete the temporary fits file
-        tmpFile = os.path.join(os.getcwd(), 'tmp.fits')
-        rmProc  = subprocess.Popen(delCmd + tmpFile, shell=shellCmd)
-        rmProc.wait()
-        rmProc.terminate()
-
-        # Now that astrometry has been solved, let's make sure to go through and
-        # mask out all pixels with zero samples.
-        maskImgList = image_tools.align_images(maskImgList, padding=np.NaN)
-        maskCount   = np.zeros(maskImgList[0].arr.shape, dtype=int)
-        for mask in maskImgList:
-            maskCount += mask.arr.astype(int)
-
-        # Make copies of the image array
-        tmpArr = avgImg.arr.copy()
-        tmpSig = avgImg.sigma.copy()
-
-        # Blank out pixels which were masked in all images
-        maskPix  = (maskCount == len(maskImgList))
-        if np.sum(maskPix) > 0:
-            maskInds = np.where(maskPix)
-            tmpArr[maskInds] = np.NaN
-
-            # Replace the sigma array
-            if hasattr(avgImg, 'sigma'):
-                tmpSig[maskInds] = np.NaN
-
-        # Replace the image array
-        avgImg1.arr   = tmpArr
-        avgImg1.sigma = tmpSig
-
-        # Save the file to disk
-        avgImg1.write(outFile)
-    else:
-        print('astrometry failed?!')
-        pdb.set_trace()
+        # Rewrite to disk...
+        combinedImg.write()
 
 print('\nDone computing average images!')

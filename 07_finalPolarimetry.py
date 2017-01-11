@@ -13,9 +13,8 @@ from astropy.stats import sigma_clipped_stats
 import pdb
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-import image_tools
-from AstroImage import AstroImage
+from astroimage.astroimage import utils
+from astroimage.astroimage import AstroImage
 
 #==============================================================================
 # *********************** CUSTOM USER CODE ************************************
@@ -117,25 +116,25 @@ for group in fileIndexByTarget.groups:
     if ((thisTarget in wcsAlignmentDict) and
         (thisWaveband in wcsAlignmentDict[thisTarget])):
         # Use WCS method to compute image offsets
-        imgOffsets = image_tools.get_image_offsets(polAngImgs,
+        imgOffsets = utils.get_image_offsets(polAngImgs,
             mode='wcs', subPixel=True)
 
         # Use the image offsets to align both the polAngImgs and the maskImgs
-        polAngImgs = image_tools.align_images(polAngImgs,
+        polAngImgs = utils.align_images(polAngImgs,
             offsets=imgOffsets, subPixel=True, padding=np.NaN)
 
-        alignedMaskImgs = image_tools.align_images(maskImgs,
+        alignedMaskImgs = utils.align_images(maskImgs,
             offsets=imgOffsets, subPixel=True, padding=1)
     else:
         # Otherwise use cross_correlate method (more accurate if it works)
-        imgOffsets = image_tools.get_image_offsets(polAngImgs,
+        imgOffsets = utils.get_image_offsets(polAngImgs,
             mode='cross_correlate', subPixel=True)
 
         # Use the image offsets to align both the polAngImgs and the maskImgs
-        polAngImgs = image_tools.align_images(polAngImgs,
+        polAngImgs = utils.align_images(polAngImgs,
             offsets=imgOffsets, subPixel=True, padding=np.NaN)
 
-        alignedMaskImgs = image_tools.align_images(maskImgs,
+        alignedMaskImgs = utils.align_images(maskImgs,
             offsets=imgOffsets, subPixel=True, padding=1)
 
     # Replace the masked pixels in the "arr" attribute with NaNs
@@ -159,7 +158,7 @@ for group in fileIndexByTarget.groups:
     # Stokes I
     #**********************************************************************
     # Average the images to get stokes I
-    stokesI = image_tools.combine_images([polAngImgs[0],
+    stokesI = utils.combine_images([polAngImgs[0],
                                           polAngImgs[200],
                                           polAngImgs[400],
                                           polAngImgs[600]])
@@ -167,7 +166,7 @@ for group in fileIndexByTarget.groups:
 
     # Perform astrometry to apply to the headers of all the other images...
     stokesI.clear_astrometry()
-    stokesI, success = image_tools.astrometry(stokesI)
+    stokesI, success = utils.solve_astrometry(stokesI)
 
     # Check if astrometry solution was successful
     if not success: pdb.set_trace()
@@ -234,7 +233,7 @@ for group in fileIndexByTarget.groups:
     #**********************************************************************
     # Build the polarization maps
     #**********************************************************************
-    Pmap, PAmap = image_tools.build_pol_maps(stokesQ, stokesU)
+    Pmap, PAmap = utils.build_pol_maps(stokesQ, stokesU)
 
     #**********************************************************************
     # Final masking and writing to disk

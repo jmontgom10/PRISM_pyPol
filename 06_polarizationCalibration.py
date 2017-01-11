@@ -22,8 +22,7 @@ from matplotlib import pyplot as plt
 import pdb
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage
+from astroimage.astroimage import AstroImage
 
 # This script will compute the photometry of polarization standard stars
 # and output a file containing the polarization position angle
@@ -164,7 +163,7 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
             polStandardBool  = [True]*len(polStandards)
 
             # Initalize an empty dictionary for storing polAng AstroImage objects
-            polAngImgs = dict()
+            polAngImgs = {}
             indexTargetWavePolAng = indexTargetWave.group_by(['Pol Ang'])
             for polAng in indexTargetWavePolAng.groups:
                 # Loop through each of the polAng images,
@@ -223,7 +222,7 @@ if (not os.path.isfile(RtableFile)) or (not os.path.isfile(VtableFile)):
 
             # Loop back through the polAngImgs, and compute the photometry of the
             # standards for each image
-            photoDict = dict()
+            photoDict = {}
             print('\tComputing photometry for')
             for polAng, img in polAngImgs.items():
                 print('\t\tPolarioid Rotation : {0}'.format(polAng))

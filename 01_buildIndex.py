@@ -20,8 +20,7 @@ import astropy.units as u
 from scipy import stats
 
 # Add the AstroImage class
-sys.path.append("C:\\Users\\Jordan\\Libraries\\python\\AstroImage")
-from AstroImage import AstroImage
+from astroimage.astroimage import AstroImage
 
 ################################################################################
 # Define a recursive file search which takes a parent directory and returns all
@@ -285,6 +284,12 @@ for group in groupFileIndex.groups:
     targetList.extend([thisTarget]*groupLen)
     ditherList.extend([thisDither]*groupLen)
     ############################################################################
+
+######### TO DO3 ########################
+# ALL CHANGES TO THE 'NAME' VALUE SHOULD BE HANDLED IN STEP 0 Now
+# I RECOMMEND SIMPLY USING THAT SCRIPT TO HANDLE THE "PREFERED NAME"
+# INSTEAD OF CREATING A SEPARATE "PREF NAME" COLUMN
+#########################################
 
 # Add the "prefered name" "Target" and "Dither" columns
 groupFileIndex.add_column(Column(name='Target',
