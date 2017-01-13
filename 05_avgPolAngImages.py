@@ -16,7 +16,7 @@ from astropy.convolution import Gaussian2DKernel
 from astropy.modeling import models, fitting
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
 from photutils import detect_sources, Background
-import subprocess
+from matplotlib import pyplot as plt
 import pdb
 
 # Add the AstroImage class
@@ -30,6 +30,13 @@ from astroimage.astroimage import AstroImage
 # this is where the user specifies where the raw data is stored
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
+
+# This is a list of targets for which to process each subgroup (observational
+# group... never spanning multiple nights, etc...) instead of combining into a
+# single "metagroup" for all observations of that target. The default behavior
+# is to go ahead and combine everything into a single, large "metagroup". The
+# calibration data should probably not be processed as a metagroup though.
+processSubGroupList = ['Taurus_Cal', 'Orion_Cal']
 
 # This is the location where all pyPol data will be saved
 pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data\\201501'
@@ -94,9 +101,6 @@ for group in fileIndexByTarget.groups:
     # this target/waveband combination for now
     if fileCount > 3: continue
 
-    # Temporarily skip everything other than M82...
-    if thisTarget != 'M82': continue
-
     # Update the user on processing status
     print('\nProcessing images for')
     print('Target   : {0}'.format(thisTarget))
@@ -112,6 +116,13 @@ for group in fileIndexByTarget.groups:
         400: polAngDict.copy(),
         600: polAngDict.copy()
     }
+
+    # If this group needs to be processed with independent keys for each
+    # "subgroup", then make sure to do that
+    if thisTarget in processSubGroupList:
+        subGroupList = list(np.unique(group['Name'].data))
+        tmpDictList  = [groupDict for i in range(len(subGroupList))]
+        groupDict    = dict(zip(subGroupList, tmpDictList))
 
     # Test which kind of dither we're dealing with and handle accordingly
     if thisDither == "ABBA":
@@ -137,8 +148,9 @@ for group in fileIndexByTarget.groups:
             x_0=1.0,
             alpha=+1.0)
 
-        # Initalize linear polynomial variation in background values
-        line_init = models.Polynomial1D(1)
+        # OLD METHOD MAY HAVE USED LINEAR FIT TO DO INTERPOLATION
+        # # Initalize linear polynomial variation in background values
+        # line_init = models.Polynomial1D(1)
 
         # Initalize model fitter for use
         fitter = fitting.LevMarLSQFitter()
@@ -181,7 +193,7 @@ for group in fileIndexByTarget.groups:
                 # estimate the median, normalized, background images, and
                 # perform the model fitting and interpolated on-target
                 # background levels
-                progressString = '\t\t\t Images: '
+                progressString = '\t\t\tImages : '
                 for row in polAngGroup:
                     # Read in a temporary compy of this image
                     file1  = row['Filename']
@@ -262,7 +274,6 @@ for group in fileIndexByTarget.groups:
                         # Store the *NORMALIZED* background image.
                         bkgImgs.append(B1bkg.background/B1bkg.background_median)
 
-
                 # Print a single newline character to keep the progressString
                 print('')
 
@@ -299,7 +310,6 @@ for group in fileIndexByTarget.groups:
                         BmedBkgs)
                     sunriseFit = fitter(sunrisePowerLaw_init, Btimes,
                         BmedBkgs)
-                    linearFit  = fitter(line_init, Btimes, BmedBkgs)
 
                 # Examine the fits to see if significant sunrise or senset found
                 sunsetTest = (sunsetFit.amplitude.value/np.median(BmedBkgs) > 1.0
@@ -384,74 +394,251 @@ for group in fileIndexByTarget.groups:
                 # the measured on-target background level minus this difference
                 AbkgVals = AmedBkgs - medDiff
 
+                # Plot the background levels and save to disk for examination...
+                fig = plt.figure()
+                ax  = figure.add_subplot(111)
+                ax.scatter(Btimes, BmedBkgs, color='blue')
+                ax.scatter(Atimes, AmedBkgs, color='red')
+                ax.plot(Atimes, AbkgVals)
+                ax.scatter(Atimes, AbkgVals, color='green')
+                fname = '_'.join([thisTarget, thisSubGroup, thisPolAng]) + '.fits'
+                fname = os.path.join(polAngDir, fname)
+                plt.savefig(fname, dpi=300)
+                plt.close('all')
+
                 # Now that the background level has been estimated for the
                 # on-target observation times, loop through the on-target images
-                # and subtract a scaled, normalized background image
-
-                # Loop through the Aimgs list to apply the aperation
+                # and subtract a normalized then re-scaled background image.
+                # This simultaneously applies a "sky-flat" and subtracts the
+                # atmospheric sky contribution from the image.
                 Aimgs = [Aimg - Abkg*bkgImg for Aimg, Abkg in zip(Aimgs, AbkgVals)]
 
                 # Build a dictionary containing the keys necessary to map into
-                # the groupDict dictionary
-                tmpDict = {
-                    'images': list(Aimgs),
-                    'background_levels': list(AbkgVals)
-                }
+                # the groupDict dictionary. This dictionary needs to have the
+                # correct structure to keep everything in order for computing
+                # either "metagroup" images for the target or "subgroup" images.
+                if thisTarget in processSubGroupList:
+                    tmpDict = {
+                        'images': list(Aimgs),
+                        'background_levels': list(AbkgVals)
+                    }
 
-                # Now that we have a set of background free images, store these in the
-                # groupDict variable for later use
-                polAngKey = int(thisPolAng)
-                for key, value in tmpDict.items():
-                    # Copy the original list of values
-                    tmpList = groupDict[polAngKey][key].copy()
+                    # Since we don't need to worry about adding MORE images to
+                    # this polAng entry for each subgroup, we can just replace
+                    # the currently empty dictionary with the tmpDict variable.
+                    groupDict[thisSubGroup][polAngKey] = tmpDict
 
-                    # Extend the list to include the new polAngDict values
-                    tmpList.extend(value)
+                else:
+                    tmpDict = {
+                        'images': list(Aimgs),
+                        'background_levels': list(AbkgVals)
+                    }
 
-                    # Replace the groupDict value with the extended list
-                    groupDict[polAngKey][key] = tmpList
+                    # The storage method must APPPEND the current images and
+                    # backgrounds to already existing lists stored in groupDict.
+                    polAngKey = int(thisPolAng)
+                    for key, value in tmpDict.items():
+                        # Copy the original list of values
+                        tmpList = groupDict[polAngKey][key].copy()
+
+                        # Extend the list to include the new polAngDict values
+                        tmpList.extend(value)
+
+                        # Replace the groupDict value with the extended list
+                        groupDict[polAngKey][key] = tmpList
 
     else:
-        # Treat the hex-dither images differently
-        pass
+        # Treat the hex-dither images differently.
+        # If the observer decided that it was appropriate to use a hex-dither
+        # rather than an ABBA or BAAB dither, then presume that background
+        # levels can be directly estimated from the on-target images.
+        # Now break the TARGET group up by its individual observational groupings
+        indexBySubGroup = group.group_by(['Name'])
+
+        # Loop through each observational grouping. This allows the time-varying
+        # background to be estimated using only data closely spaced in time.
+        # Trying to parse all the data for each target/waveband combination
+        # simultaneously would not result in accurate background estimations.
+        subGroupKeys = indexBySubGroup.groups.keys
+        for subGroup in indexBySubGroup.groups:
+            # Update the user on the current execution status
+            thisSubGroup = str(np.unique(subGroup['Name'])[0])
+            print('\tProcessing background levels for subgroup {0}'.format(thisSubGroup))
+
+            # For an ABBA dither, we need to treat each polAng value separately.
+            # Start by breaking the subGroup up into its constituent polAngs
+            indexByPolAng  = subGroup.group_by(['Pol Ang'])
+
+            # Loop through each polAng subset of the subGroup
+            polAngGroupKeys = indexByPolAng.groups.keys
+            for polAngGroup in indexByPolAng.groups:
+                # Update the user on processing status
+                thisPolAng = str(np.unique(polAngGroup['Pol Ang'])[0])
+                print('\t\tPolaroid Angle : {0}'.format(thisPolAng))
+
+                # Initalize temporary lists to hold the images, times, etc....
+                imgList = []
+                bkgVals = []
+
+                # Loop through each row of the polAng group, read in the images,
+                # grab the observation times, estimate the background levels,
+                # estimate the median, normalized, background images, and
+                # perform the model fitting and interpolated on-target
+                # background levels
+                progressString = '\t\t\tImages : '
+                for irow, row in enumerate(polAngGroup):
+                    # Update the user on processing status
+                    imgNumStr = ', '.join([str(i+1) for i in range(irow+1)])
+                    print(progressString + imgNumStr, end="\r")
+
+                    # Read in a temporary compy of this image
+                    file1  = row['Filename']
+                    tmpImg = AstroImage(file1)
+
+                    # Apped the image to the imgList variable
+                    imgList.append(tmpImg)
+
+                    # Compute the image statistics and store them
+                    goodPix= np.isfinite(tmpImg.arr)
+                    if np.sum(goodPix) > 0:
+                        # Find the good pixels
+                        goodInds = np.where(goodPix)
+                        # mean, median, std = sigma_clipped_stats(
+                        #     tmpImg.arr[goodInds])
+
+                        # Store the background median value
+                        bkgVals.append(np.median(tmpImg.arr[goodInds]))
+                    else:
+                        print('There are no good pixels in this image...')
+                        pdb.set_trace()
+
+                # Print a single newline character to keep the progressString
+                print('')
+
+                # Now that the images have been read in and processed, proceed
+                # to compute a subtract sky-background levels.
+                imgList = [img - bkg for img, bkg in zip(imgList, bkgVals)]
+
+                # Build a dictionary containing the keys necessary to map into
+                # the groupDict dictionary. This dictionary needs to have the
+                # correct structure to keep everything in order for computing
+                # either "metagroup" images for the target or "subgroup" images.
+                if thisTarget in processSubGroupList:
+                    tmpDict = {
+                        'images': list(imgList),
+                        'background_levels': list(bkgVals)
+                    }
+
+                    # Since we don't need to worry about adding MORE images to
+                    # this polAng entry for each subgroup, we can just replace
+                    # the currently empty dictionary with the tmpDict variable.
+                    polAngKey = int(thisPolAng)
+                    groupDict[thisSubGroup][polAngKey] = tmpDict
+
+                else:
+                    tmpDict = {
+                        'images': list(imgList),
+                        'background_levels': list(bkgVals)
+                    }
+
+                    # The storage method must APPPEND the current images and
+                    # backgrounds to already existing lists stored in groupDict.
+                    polAngKey = int(thisPolAng)
+                    for key, value in tmpDict.items():
+                        # Copy the original list of values
+                        tmpList = groupDict[polAngKey][key].copy()
+
+                        # Extend the list to include the new polAngDict values
+                        tmpList.extend(value)
+
+                        # Replace the groupDict value with the extended list
+                        groupDict[polAngKey][key] = tmpList
 
     # Now that the groupDict variable contains ALL the information necessary for
     # computing average polAng images, DO JUST THAT!
 
-    # Loop through groupDict keys, which are the polAng values
-    for polAng in groupDict.keys():
-        thisPolAng = str(polAng)
-        print('\tGenerating average image for')
-        print('\tPolaroid Angle : {0}'.format(thisPolAng))
+    # First test whether this needs to be processed as a "metagroup" or on a
+    # "subgroup" basis.
+    if thisTarget in processSubGroupList:
+        # Process the subgroups.
+        # Loop through each sub-group and compute its output images
+        for subGroupKey, subGroupDict in groupDict.items():
+            thisSubGroup = str(subGroupKey)
+            print('\tGenerating average images for {0}'.format(thisSubGroup))
 
-        # Align the images for addition (don't worry about sub-pixel alignment
-        # precision since we are not subtracting two images but adding them!)
-        alignedImgList = utils.align_images(
-            groupDict[polAng]['images'],
-            padding=np.NaN,
-            mode='WCS',
-            subPixel=False)
+            # Loop through each polAng value in the subGroupDict
+            for polAng in subGroupDict.keys():
+                thisPolAng = str(polAng)
+                print('\t\tPolaroid Angle : {0}'.format(thisPolAng))
 
-        # Compute the average image using the AstroImage "utilities"
-        combinedImg = utils.combine_images(
-            alignedImgList,
-            groupDict[polAng]['background_levels'],
-            output = 'MEAN',
-            effective_gain = effective_gain,
-            read_noise = read_noise)
+                # Align the images for addition (don't worry about sub-pixel
+                # alignment precision since we are not subtracting images but
+                # adding them!)
+                alignedImgList = utils.align_images(
+                    subGroupDict[polAng]['images'],
+                    padding=np.NaN,
+                    mode='WCS',
+                    subPixel=False)
 
-        # Construct an image name and save to disk!
-        outputFile = '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits'
-        outputPath = os.path.join(polAngDir, outputFile)
-        combinedImg.clear_astrometry()
-        combinedImg.filename = outputPath
-        combinedImg.write()
+                # Compute the average image using the AstroImage "utilities"
+                combinedImg = utils.combine_images(
+                    alignedImgList,
+                    subGroupDict[polAng]['background_levels'],
+                    output = 'MEAN',
+                    effective_gain = effective_gain,
+                    read_noise = read_noise)
 
-        # Resolve the astrometry of this image
-        print('\tResolving astrometry...')
-        combinedImg, success = utils.solve_astrometry(combinedImg)
+                # Construct an image name and save to disk!
+                outputFile = '_'.join([thisTarget, thisSubGroup, thisPolAng]) + '.fits'
+                outputPath = os.path.join(polAngDir, outputFile)
+                combinedImg.clear_astrometry()
+                combinedImg.filename = outputPath
+                combinedImg.write()
 
-        # Rewrite to disk...
-        combinedImg.write()
+                # Resolve the astrometry of this combined image
+                print('\tResolving astrometry...')
+                combinedImg, success = utils.solve_astrometry(combinedImg)
+
+                # Rewrite to disk...
+                combinedImg.write()
+
+    else:
+        # Process as a metagroup.
+        # Loop through groupDict keys, which are the polAng values
+        for polAng in groupDict.keys():
+            thisPolAng = str(polAng)
+            print('\tGenerating average image for')
+            print('\tPolaroid Angle : {0}'.format(thisPolAng))
+
+            # Align the images for addition (don't worry about sub-pixel
+            # alignment precision since we are not subtracting images but adding
+            # them!)
+            alignedImgList = utils.align_images(
+                groupDict[polAng]['images'],
+                padding=np.NaN,
+                mode='WCS',
+                subPixel=False)
+
+            # Compute the average image using the AstroImage "utilities"
+            combinedImg = utils.combine_images(
+                alignedImgList,
+                groupDict[polAng]['background_levels'],
+                output = 'MEAN',
+                effective_gain = effective_gain,
+                read_noise = read_noise)
+
+            # Construct an image name and save to disk!
+            outputFile = '_'.join([thisTarget, thisWaveband, thisPolAng]) + '.fits'
+            outputPath = os.path.join(polAngDir, outputFile)
+            combinedImg.clear_astrometry()
+            combinedImg.filename = outputPath
+            combinedImg.write()
+
+            # Resolve the astrometry of this combined image
+            print('\tResolving astrometry...')
+            combinedImg, success = utils.solve_astrometry(combinedImg)
+
+            # Rewrite to disk...
+            combinedImg.write()
 
 print('\nDone computing average images!')
