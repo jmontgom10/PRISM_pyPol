@@ -30,7 +30,7 @@ import pdb
 from astroimage.astroimage import AstroImage
 
 # This is the location where all pyPol data will be saved
-pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
+pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data\\201501\\'
 
 # Set the saturation limit for this image (a property of the detector)
 satLimit = 12e3
@@ -123,6 +123,8 @@ groupKeys = fileIndexByTarget.groups.keys
 for group in fileIndexByTarget.groups:
     # Grab the current target information
     thisTarget   = str(np.unique(group['Target'].data)[0])
+
+    if thisTarget != 'M82': continue
 
     print('\nProcessing images for {0}'.format(thisTarget))
 
@@ -1134,53 +1136,6 @@ for group in fileIndexByTarget.groups:
         Uimg1 = stokesUdict[band1]
         Uimg2 = stokesUdict[band2]
 
-        # Make copies of these images to track the image footprint
-        img1a = img1.copy()
-        img2a = img2.copy()
-
-        # Delete the unnecessary "sigma" attributes if they're not needed
-        if hasattr(img1a, 'sigma'):
-            delattr(img1a, 'sigma')
-        if hasattr(img2a, 'sigma'):
-            delattr(img2a, 'sigma')
-
-        # Store a simple map containing the image footprint
-        # Before the images are aligned, this is simply an array of ones
-        img1a.arr = np.ones(img1.arr.shape, dtype=int)
-        img2a.arr = np.ones(img2.arr.shape, dtype=int)
-
-        # Align the two images and "pixel-footprint" copy
-        # Start by determining the sub-pixel accurate image offsets
-        imgOffsets     = img1.get_img_offsets(img2,
-            subPixel=True, mode='cross_correlate')
-
-        # Apply the determined image offsets to the I, Q, U images and pix maps
-        alignedImgs    = img1.align(img2, subPixel=True, offsets=imgOffsets)
-        alignedQimgs   = Qimg1.align(Qimg2, subPixel=True, offsets=imgOffsets)
-        alignedUimgs   = Uimg1.align(Uimg2, subPixel=True, offsets=imgOffsets)
-        alignedPixMaps = img1a.align(img2a, subPixel=True, offsets=imgOffsets)
-        pixelCountImg  = np.sum(alignedPixMaps)
-
-        # Grab the image center pixel coordinates
-        ny, nx = pixelCountImg.arr.shape
-        yc, xc = ny//2, nx//2
-
-        # Find the actual cut points for the cropping of the "common image"
-        maxCount = len(alignedImgs)
-        goodCol  = np.where(np.abs(pixelCountImg.arr[:,xc] - maxCount) < 1e-2)
-        goodRow  = np.where(np.abs(pixelCountImg.arr[yc,:] - maxCount) < 1e-2)
-        bt, tp   = np.min(goodCol), np.max(goodCol)
-        lf, rt   = np.min(goodRow), np.max(goodRow)
-
-        # Now the the crop boundaries have been determined, apply the crop to
-        # the aligned images
-        img1  = alignedImgs[0].crop(lf, rt, bt, tp, copy=True)
-        img2  = alignedImgs[1].crop(lf, rt, bt, tp, copy=True)
-        Qimg1 = alignedQimgs[0].crop(lf, rt, bt, tp, copy=True)
-        Qimg2 = alignedQimgs[1].crop(lf, rt, bt, tp, copy=True)
-        Uimg1 = alignedUimgs[0].crop(lf, rt, bt, tp, copy=True)
-        Uimg2 = alignedUimgs[1].crop(lf, rt, bt, tp, copy=True)
-
         # Compute the flux ratio, fix negative values, and convert to colors
         fluxRatio = img1/img2
 
@@ -1213,7 +1168,8 @@ for group in fileIndexByTarget.groups:
 
         # Compute the calibrated color image and replace the simple uncertainty
         # with the full blown uncertainty...
-        calColor = truthsC[1] + truthsC[0]*instColor.arr
+        calColor       = instColor.copy()
+        calColor.arr   = truthsC[1] + truthsC[0]*instColor.arr
         calColor.sigma = sig_Color
 
         # Now that the color-map has been computed, apply the calibration
