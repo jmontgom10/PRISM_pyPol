@@ -53,6 +53,10 @@ polAngDir = os.path.join(polarimetryDir, 'polAngImgs')
 if (not os.path.isdir(polAngDir)):
     os.mkdir(polAngDir, 0o755)
 
+bkgPlotDir = os.path.join(polAngDir, 'bkgPlots')
+if (not os.path.isdir(bkgPlotDir)):
+    os.mkdir(bkgPlotDir, 0o755)
+
 # Setup PRISM detector properties
 read_noise = 13.0 # electrons
 effective_gain = 3.3 # electrons/ADU
@@ -311,6 +315,10 @@ for group in fileIndexByTarget.groups:
                     sunriseFit = fitter(sunrisePowerLaw_init, Btimes,
                         BmedBkgs)
 
+                ######
+                # TODO -- rerun M104_V5 and see if I can catch the powerlaws
+                # rise in background level...
+                #######
                 # Examine the fits to see if significant sunrise or senset found
                 sunsetTest = (sunsetFit.amplitude.value/np.median(BmedBkgs) > 1.0
                     and sunsetFit.alpha.value < -0.9)
@@ -376,17 +384,12 @@ for group in fileIndexByTarget.groups:
                 diffVals    = AmedBkgs[interpInds] - AinterpVals[interpInds]
                 medDiff     = np.median(diffVals)
 
-                #
-                # Old method of KEEPING the interpolated values...
-                # This possible INTRODUCES as much error as it "repairs"
-                #
-                # # Now simply replace the uninterpolated values with the
-                # # difference between on-target and off-target background
-                # # estimates added to the median interpolated value
-                # nonInterpInds = np.where(np.isnan(AinterpVals))
-                # replaceVal    = AmedBkgs[nonInterpInds] - medDiff
-                # AinterpVals[nonInterpInds] = AmedBkgs[nonInterpInds] - medDiff
-                # AbkgVals = AinterpVals
+                # Force medDiff to be either zero or positive. A medDiff value
+                # less than zero implies that the on-target images have
+                # NEGATIVE background contribution from the Earth's atmosphere.
+                # We assume that this cannot be and hence do not allow it.
+                if medDiff < 0:
+                    medDiff = 0
 
                 # Now that we have an estimate of the median difference between
                 # the off-target background level and the on-target background
@@ -396,13 +399,13 @@ for group in fileIndexByTarget.groups:
 
                 # Plot the background levels and save to disk for examination...
                 fig = plt.figure()
-                ax  = figure.add_subplot(111)
+                ax  = fig.add_subplot(111)
                 ax.scatter(Btimes, BmedBkgs, color='blue')
                 ax.scatter(Atimes, AmedBkgs, color='red')
                 ax.plot(Atimes, AbkgVals)
                 ax.scatter(Atimes, AbkgVals, color='green')
-                fname = '_'.join([thisTarget, thisSubGroup, thisPolAng]) + '.fits'
-                fname = os.path.join(polAngDir, fname)
+                fname = '_'.join([thisTarget, thisSubGroup, thisPolAng]) + '.png'
+                fname = os.path.join(bkgPlotDir, fname)
                 plt.savefig(fname, dpi=300)
                 plt.close('all')
 
