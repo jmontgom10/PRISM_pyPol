@@ -49,7 +49,7 @@ indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
 fileIndex = Table.read(indexFile, format='ascii.csv')
 
 print('\nReading calibration constants from disk')
-calTableFile = os.path.join(pyPol_data, 'calData.csv')
+calTableFile = os.path.join(pyPol_data, 'polCalConstants.csv')
 calTable = Table.read(calTableFile, format='ascii.csv')
 
 # Determine which parts of the fileIndex pertain to science images

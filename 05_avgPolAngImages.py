@@ -6,6 +6,7 @@ Created on Sat Aug 29 17:03:39 2015
 
 import os
 import sys
+import copy
 from datetime import datetime
 import warnings
 import numpy as np
@@ -15,7 +16,7 @@ from astropy.table import Column as Column
 from astropy.convolution import Gaussian2DKernel
 from astropy.modeling import models, fitting
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
-from photutils import detect_sources, Background
+from photutils import detect_sources, SigmaClip, Background2D, MedianBackground
 from matplotlib import pyplot as plt
 import pdb
 
@@ -90,13 +91,20 @@ for group in fileIndexByTarget.groups:
     # Grab all the unique polaroid angle values reperesented within this group.
     polAngs = np.unique(group['Pol Ang'].data)
 
+    # Update the user on processing status
+    print('\nProcessing images for')
+    print('Target   : {0}'.format(thisTarget))
+    print('Waveband : {0}'.format(thisWaveband))
+    print('Dither   : {0}'.format(thisDither))
+
     # Loop through the polAngs and check if these images have already been done
     fileCount = 0
     for polAng in polAngs:
-        # Test if this target-waveband-polAng combo was previously processed
+        # Test if this group was previously processed.
         testFile = '_'.join([thisTarget, thisWaveband, str(polAng)])
         testPath = os.path.join(polAngDir, testFile) + '.fits'
 
+        # Now that the filename has been constructed, test for file existence
         if os.path.isfile(testPath):
             print('File ' + testFile + ' already exists...')
             fileCount += 1
@@ -105,33 +113,40 @@ for group in fileIndexByTarget.groups:
     # this target/waveband combination for now
     if fileCount > 3: continue
 
-    # Update the user on processing status
-    print('\nProcessing images for')
-    print('Target   : {0}'.format(thisTarget))
-    print('Waveband : {0}'.format(thisWaveband))
-    print('Dither   : {0}'.format(thisDither))
-
     # Initalize a dictionary in which to store the lists of polAng images to be
     # combined and their background levels, too.
     polAngDict = {'images':[], 'background_levels':[]}
-    groupDict  = {
-        0:   polAngDict.copy(),
-        200: polAngDict.copy(),
-        400: polAngDict.copy(),
-        600: polAngDict.copy()
+    polAngDict = {
+        0:   copy.deepcopy(polAngDict),
+        200: copy.deepcopy(polAngDict),
+        400: copy.deepcopy(polAngDict),
+        600: copy.deepcopy(polAngDict)
     }
 
-    # If this group needs to be processed with independent keys for each
-    # "subgroup", then make sure to do that
+    # Initalize a groupDict to store all the background subtracted images. If
+    # this target will store subGroup information, then initalize a blank
+    # dictionary so that copies of the polAngDict can be placed into individual
+    # keys for each subGroup. Otherwise, just make the groupDict a straight copy
+    # of the polAngDict to store ALL the polAng images from all the subgroups.
     if thisTarget in processSubGroupList:
-        subGroupList = list(np.unique(group['Name'].data))
-        tmpDictList  = [groupDict for i in range(len(subGroupList))]
-        groupDict    = dict(zip(subGroupList, tmpDictList))
+        groupDict = {}
+    else:
+        groupDict = copy.deepcopy(polAngDict)
+
+
+    # If the code proceeds to this point, then it must process at least one
+    # subGroup. Thus, let's initalize a counter to keep track of that.
+    subGroupCount = 0
 
     # Test which kind of dither we're dealing with and handle accordingly
-    if thisDither == "ABBA":
+    if thisDither == 'ABBA':
         # Now break the TARGET group up by its individual observational groupings
         indexBySubGroup = group.group_by(['Name'])
+
+        # Set the background estimation properties using the following classes
+        # provided by the photutils package
+        sigma_clip    = SigmaClip(sigma=3., iters=10)
+        bkg_estimator = MedianBackground()
 
         # In the following loop through each polaroid rotation anglue, we
         # will test for sunrise and sunset powerlaws in the background
@@ -172,6 +187,34 @@ for group in fileIndexByTarget.groups:
             thisSubGroup = str(np.unique(subGroup['Name'])[0])
             print('\tProcessing background levels for subgroup {0}'.format(thisSubGroup))
 
+            # If this group needs to be processed with independent keys for each
+            # "subgroup", then test whether those files have already been done.
+            if thisTarget in processSubGroupList:
+                # Loop through the polAngs and check if these images have already been done
+                fileCount     = 0
+                for polAng in polAngs:
+                    # Test if this group was previously processed.
+                    testFile = '_'.join([thisTarget, thisSubGroup, str(polAng)])
+                    testPath = os.path.join(polAngDir, testFile) + '.fits'
+
+                    # Now that the filename has been constructed, test for file existence
+                    if os.path.isfile(testPath):
+                        print('\tFile ' + testFile + ' already exists...')
+                        fileCount += 1
+
+                if fileCount > 3:
+                    # If all four polaroid angle images have been processed,
+                    # then simply skip this subgroup for now.
+                    continue
+                else:
+                    # otherwise proceed AND increment the subGroupCount by 1
+                    subGroupCount += 1
+
+                # Now that we have determined that this subGroup SHOULD be
+                # processed, let's add an entry to the groupDict to store
+                # the data for this subGroup.
+                groupDict[thisSubGroup] = copy.deepcopy(polAngDict)
+
             # For an ABBA dither, we need to treat each polAng value separately.
             # Start by breaking the subGroup up into its constituent polAngs
             indexByPolAng  = subGroup.group_by(['Pol Ang'])
@@ -210,7 +253,7 @@ for group in fileIndexByTarget.groups:
                     # Treat the "on-target" files
                     if row['ABBA'] == 'A':
                         progressString += 'A'
-                        print(progressString, end="\r")
+                        print(progressString, end='\r')
 
                         # Add the unaltered image to the Aimg list
                         Aimgs.append(tmpImg)
@@ -242,14 +285,16 @@ for group in fileIndexByTarget.groups:
 
                     if row['ABBA'] == 'B':
                         progressString += 'B'
-                        print(progressString, end="\r")
+                        print(progressString, end='\r')
 
                         # Store the relative observing time in the Btimes list
                         Btimes.append((dt - dt0).total_seconds())
 
                         # Estimate the background for this off-target image
-                        B1bkg     = Background(tmpImg.arr, (100, 100),
-                            filter_shape=(3, 3),  method='median')
+                        B1bkg     = Background2D(tmpImg.arr, (100, 100),
+                            filter_size=(3, 3),
+                            sigma_clip=sigma_clip,
+                            bkg_estimator=bkg_estimator)
                         threshold = B1bkg.background + 3.0*B1bkg.background_rms
 
                         # Build a mask for any sources above the 3-sigma
@@ -269,8 +314,10 @@ for group in fileIndexByTarget.groups:
 
                         # Estimate a 2D background image masking possible
                         # sources.
-                        B1bkg = Background(tmpImg.arr, (100, 100),
-                            filter_shape=(3, 3), method='median', mask=mask)
+                        B1bkg = Background2D(tmpImg.arr, (100, 100), mask=mask,
+                            filter_size=(3, 3),
+                            sigma_clip=sigma_clip,
+                            bkg_estimator=bkg_estimator)
 
                         # Store the median background level for this image.
                         BmedBkgs.append(B1bkg.background_median)
@@ -309,7 +356,7 @@ for group in fileIndexByTarget.groups:
                 # Perform the test fits ignoring some common warnings
                 with warnings.catch_warnings():
                     # Ignore warning from the fitter
-                    warnings.simplefilter("ignore")
+                    warnings.simplefilter('ignore')
                     sunsetFit  = fitter(sunsetPowerLaw_init, Btimes,
                         BmedBkgs)
                     sunriseFit = fitter(sunrisePowerLaw_init, Btimes,
@@ -404,6 +451,8 @@ for group in fileIndexByTarget.groups:
                 ax.scatter(Atimes, AmedBkgs, color='red')
                 ax.plot(Atimes, AbkgVals)
                 ax.scatter(Atimes, AbkgVals, color='green')
+                ax.set_xlabel('Time [sec]')
+                ax.set_ylabel('Backhground [ADU]')
                 fname = '_'.join([thisTarget, thisSubGroup, thisPolAng]) + '.png'
                 fname = os.path.join(bkgPlotDir, fname)
                 plt.savefig(fname, dpi=300)
@@ -450,25 +499,49 @@ for group in fileIndexByTarget.groups:
                         # Replace the groupDict value with the extended list
                         groupDict[polAngKey][key] = tmpList
 
-    else:
+    elif thisDither == 'HEX':
         # Treat the hex-dither images differently.
         # If the observer decided that it was appropriate to use a hex-dither
         # rather than an ABBA or BAAB dither, then presume that background
         # levels can be directly estimated from the on-target images.
-        # Now break the TARGET group up by its individual observational groupings
+        # Now break the TARGET group up by its individual observations.
         indexBySubGroup = group.group_by(['Name'])
 
-        # Loop through each observational grouping. This allows the time-varying
-        # background to be estimated using only data closely spaced in time.
-        # Trying to parse all the data for each target/waveband combination
-        # simultaneously would not result in accurate background estimations.
+        # Loop through each observational grouping.
         subGroupKeys = indexBySubGroup.groups.keys
         for subGroup in indexBySubGroup.groups:
             # Update the user on the current execution status
             thisSubGroup = str(np.unique(subGroup['Name'])[0])
-            print('\tProcessing background levels for subgroup {0}'.format(thisSubGroup))
+            print('\tProcessing images for subgroup {0}'.format(thisSubGroup))
 
-            # For an ABBA dither, we need to treat each polAng value separately.
+            # If this group needs to be processed with independent keys for each
+            # "subgroup", then test whether those files have already been done.
+            if thisTarget in processSubGroupList:
+                # Loop through the polAngs and check if these images have already been done
+                fileCount     = 0
+                for polAng in polAngs:
+                    # Test if this group was previously processed.
+                    testFile = '_'.join([thisTarget, thisSubGroup, str(polAng)])
+                    testPath = os.path.join(polAngDir, testFile) + '.fits'
+
+                    # Now that the filename has been constructed, test for file existence
+                    if os.path.isfile(testPath):
+                        print('\tFile ' + testFile + ' already exists...')
+                        fileCount += 1
+
+                if fileCount > 3:
+                    # If all four polaroid angle images have been processed,
+                    # then simply skip this subgroup for now.
+                    continue
+                else:
+                    # otherwise proceed AND increment the subGroupCount by 1
+                    subGroupCount += 1
+
+                # Now that we have determined that this subGroup SHOULD be
+                # processed, let's add an entry to the groupDict to store
+                # the data for this subGroup.
+                groupDict[thisSubGroup] = copy.deepcopy(polAngDict)
+
             # Start by breaking the subGroup up into its constituent polAngs
             indexByPolAng  = subGroup.group_by(['Pol Ang'])
 
@@ -492,7 +565,7 @@ for group in fileIndexByTarget.groups:
                 for irow, row in enumerate(polAngGroup):
                     # Update the user on processing status
                     imgNumStr = ', '.join([str(i+1) for i in range(irow+1)])
-                    print(progressString + imgNumStr, end="\r")
+                    print(progressString + imgNumStr, end='\r')
 
                     # Read in a temporary compy of this image
                     file1  = row['Filename']
@@ -556,6 +629,10 @@ for group in fileIndexByTarget.groups:
 
                         # Replace the groupDict value with the extended list
                         groupDict[polAngKey][key] = tmpList
+
+        # Now that we've  attempted to read in and process any subGroup images,
+        # let's test whether or not subGroups were actually processed here...
+        if subGroupCount == 0: continue
 
     # Now that the groupDict variable contains ALL the information necessary for
     # computing average polAng images, DO JUST THAT!

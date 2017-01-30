@@ -192,6 +192,8 @@ for group in groupFileIndex.groups:
         thisName = str(thisName[0])
     else:
         print('There is more than one name in this group!')
+        print('Return the script "00_renameGroups" and fix this problem')
+        print('Image Numbers ???--- ---???')
         pdb.set_trace()
 
     # Test if the waveband is truely uniqe name truely is unique

@@ -123,9 +123,6 @@ groupKeys = fileIndexByTarget.groups.keys
 for group in fileIndexByTarget.groups:
     # Grab the current target information
     thisTarget   = str(np.unique(group['Target'].data)[0])
-
-    if thisTarget != 'M82': continue
-
     print('\nProcessing images for {0}'.format(thisTarget))
 
     # Look for a photometric star catalog for this target
@@ -525,8 +522,8 @@ for group in fileIndexByTarget.groups:
         # entry with a semi-unique 'Star ID'
         # Extract the star positions from the photometry table
         # (this is redundant but a nice confirmation that these will be right)
-        xStars = phot_table['xcenter_raw'].data
-        yStars = phot_table['ycenter_raw'].data
+        xStars = phot_table['xcenter_raw']
+        yStars = phot_table['ycenter_raw']
 
         # Initalize an empty list to store the starIDs
         starIDs = -1*np.ones(len(phot_table), dtype=int)
@@ -536,7 +533,7 @@ for group in fileIndexByTarget.groups:
 
             # Compute the distance between the current star and all other stars
             xs, ys = row['xcenter_raw'], row['ycenter_raw']
-            dist   = np.sqrt((xs - xStars)**2 + (ys - yStars)**2)
+            dist   = np.sqrt((xs - xStars)**2 + (ys - yStars)**2).value
 
             if np.sum(dist < 2.0) > 0:
                 # Mark all stars within 2.0 pixels of the current star with an
@@ -1189,17 +1186,15 @@ for group in fileIndexByTarget.groups:
         # Grab the pixel area to include in the linear scaling constants
         wcs1        = WCS(img1.header)
         wcs2        = WCS(img2.header)
-        pixel_area1 = proj_plane_pixel_area(wcs1)*(3600**2)
-        pixel_area2 = proj_plane_pixel_area(wcs2)*(3600**2)
 
-        # Store the linear scaling constants in the "BSCaLE" keyword
-        BSCALE1  = zeroFlux[band1]*(1e6)*CF1_1/pixel_area1
-        BSCALE2  = zeroFlux[band2]*(1e6)*CF2_1/pixel_area2
-        SBSCALE1 = zeroFlux[band1]*(1e6)*sig_CF1_1/pixel_area1
-        SBSCALE2 = zeroFlux[band2]*(1e6)*sig_CF2_1/pixel_area2
+        # Store the linear scaling constants in the "BSCALE" keyword
+        BSCALE1  = zeroFlux[band1]*CF1_1
+        BSCALE2  = zeroFlux[band2]*CF2_1
+        SBSCALE1 = zeroFlux[band1]*sig_CF1_1
+        SBSCALE2 = zeroFlux[band2]*sig_CF2_1
 
         # Describe the scaling offset and linear units
-        BUNIT = 'uJy/sqarcs'
+        BUNIT = 'Jy'
         BZERO = 0.0
 
         # Store the calibration data in the header
