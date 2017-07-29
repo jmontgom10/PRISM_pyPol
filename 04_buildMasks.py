@@ -1,16 +1,53 @@
+# -*- coding: utf-8 -*-
+"""
+Launches a GUI mask builder for each file associated with  the targets specidied
+by the 'targets' variable.
+
+When the script is launched, a three pane plot of the science images will be
+displayed. The center pane in this triptych is the active pane for which you are
+build a mask. The following look-up table indicates which button clicks and keys
+presses are associated with a given action in the GUI.
+
+--------------------------------------------------------------------------------
+Event	    | Effect
+--------------------------------------------------------------------------------
+Left Click	| Apply a circular aperture mask to the clicked region
+
+Right Click	| Delete a circular aperture mask from the clicked region
+
+1 - 6	    | Set the size of the circular aperture
+
+Enter	    | Save the current mask for the center pane to disk
+
+Backspace	| Reset the current mask to a blank slate
+
+Left/Right	| Change the active pane to the previous/next image
+--------------------------------------------------------------------------------
+
+To build a mask, simply click on the regions of the active pane which need to be
+masked. The mask will be displayed in the center pane as a semi-opaque white
+outline. You can delete regions of the mask with right clicks. Once you are
+satisfied with the mask you've build, you can save it to disk with a single
+stroke of the Enter key. Press the left or right arrow keys to scroll through
+the images for the specified target(s), and press the Backspace key to clear the
+current mask to be completely blank. Simply close the GUI window plot to end the
+script.
+"""
+
+# Imports
 import os
 import sys
 import numpy as np
 from matplotlib import pyplot as plt
-from astropy.io import ascii
-from astropy.table import Column as Column
-from astropy.table import Table as Table
-import pdb
+from astropy.table import Table, Column
+from astropy.visualization import ZScaleInterval
 
+# TODO: build a "MaskBuilder" class to manage all these variables and actions.
+# Define the mask directory as a global variable
 global maskDir
 
 # Add the AstroImage class
-from astroimage.astroimage import AstroImage
+import astroimage as ai
 
 #==============================================================================
 # *********************** CUSTOM USER CODE ************************************
@@ -18,15 +55,15 @@ from astroimage.astroimage import AstroImage
 # and some of the subdirectory structure to find the actual .FITS images
 #==============================================================================
 # This is the location of all pyBDP data (index, calibration images, reduced...)
-pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data'
+pyBDP_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyBDP_data\\201612'
 
 # This is the location where all pyPol data will be saved
-pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data'
+pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data\\201612'
 
 # The user can speed up the process by defining the "Target" values from
 # the fileIndex to be considered for masking.
 # Masks can onlybe produced for targets in this list.
-targets = ['NGC2023', 'NGC7023', 'NGC1977', 'M78']
+targets = ['NGC2023', 'NGC7023']
 
 # This is the location of the pyBDP processed Data
 pyBDP_reducedDir = os.path.join(pyBDP_data, 'pyBDP_reduced_images')
@@ -41,19 +78,28 @@ print('\nReading file index from disk')
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
 fileIndex = Table.read(indexFile, format='ascii.csv')
 
-# Determine which parts of the fileIndex pertain to science images
-useFiles = np.logical_and(fileIndex['Use'] == 1,
-                          fileIndex['Dither'] == 'ABBA')
+# Determine which parts of the fileIndex pertain to on-target science images
+useFiles = np.logical_and(
+    fileIndex['USE'] == 1,
+    fileIndex['DITHER_TYPE'] == 'ABBA'
+)
+useFiles = np.logical_and(
+    useFiles,
+    fileIndex['AB'] == 'A'
+)
 
 # Further restrict the selection to only include the selected targets
-targetFiles = np.array([False]*len(fileIndex), dtype=bool)
+targetFiles = np.zeros((len(fileIndex),), dtype=bool)
 for target in targets:
-    targetFiles = np.logical_or(targetFiles,
-                                fileIndex['Target'] == target)
+    targetFiles = np.logical_or(
+        targetFiles,
+        fileIndex['TARGET'] == target
+    )
 
 # Cull the fileIndex to ONLY include the specified targets
-fileIndex = fileIndex[np.where(np.logical_and(useFiles, targetFiles))]
-
+goodTargetRows = np.logical_and(useFiles, targetFiles)
+targetRowInds  = np.where(goodTargetRows)
+fileIndex      = fileIndex[targetRowInds]
 
 #******************************************************************************
 # Define the event handlers for clicking and keying on the image display
@@ -71,13 +117,17 @@ def on_click(event):
     dist     = np.sqrt((xx - x)**2 + (yy - y)**2)
     maskInds = np.where(dist < brushSize*5)
     if event.button == 1:
-        maskImg.arr[maskInds] = 1
+        tmpData = maskImg.data
+        tmpData[maskInds] = 1
+        maskImg.data = tmpData
     if (event.button == 2) or (event.button == 3):
-        maskImg.arr[maskInds] = 0
+        tmpData = maskImg.data
+        tmpData[maskInds] = 0
+        maskImg.data = tmpData
 
     # Update contour plot (clear old lines redo contouring)
     axarr[1].collections = []
-    axarr[1].contour(xx, yy, maskImg.arr, levels=[0.5], colors='white', alpha = 0.2)
+    axarr[1].contour(xx, yy, maskImg.data, levels=[0.5], colors='white', alpha = 0.2)
 
     # Update the display
     fig.canvas.draw()
@@ -115,22 +165,25 @@ def on_key(event):
             # Read in the new files
             prevImg = thisImg
             thisImg = nextImg
-            nextImg = AstroImage(fileList[(imgNum + 1) % len(fileList)])
+            nextImg = ai.ReducedScience.read(fileList[(imgNum + 1) % len(fileList)])
 
             # Update target info
             prevTarget = thisTarget
             thisTarget = nextTarget
             nextTarget = targetList[(imgNum + 1) % len(fileList)]
 
+            # Build the image scaling intervals
+            zScaleGetter = ZScaleInterval()
+
             # Compute new image display minima
             prevMin = thisMin
             thisMin = nextMin
-            nextMin = np.median(nextImg.arr) - 0.25*np.std(nextImg.arr)
+            nextMin, _ = zScaleGetter.get_limits(nextImg.data)
 
             # Compute new image display maxima
             prevMax = thisMax
             thisMax = nextMax
-            nextMax = np.median(nextImg.arr) + 2*np.std(nextImg.arr)
+            _, nextMax = zScaleGetter.get_limits(nextImg.data)
 
         if event.key == 'left':
             #Move back to the previous image
@@ -139,22 +192,25 @@ def on_key(event):
             # Read in the new files
             nextImg = thisImg
             thisImg = prevImg
-            prevImg = AstroImage(fileList[(imgNum - 1) % len(fileList)])
+            prevImg = ai.ReducedScience.read(fileList[(imgNum - 1) % len(fileList)])
 
             # Update target info
             nextTarget = thisTarget
             thisTarget = prevTarget
             prevTarget = targetList[(imgNum - 1) % len(fileList)]
 
+            # Build the image scaling intervals
+            zScaleGetter = ZScaleInterval()
+
             # Compute new image display minima
             nextMin = thisMin
             thisMin = prevMin
-            prevMin = np.median(prevImg.arr) - 0.25*np.std(prevImg.arr)
+            prevMin, _ = zScaleGetter.get_limits(prevImg.data)
 
             # Compute new image display maxima
             nextMax = thisMax
             thisMax = prevMax
-            prevMax = np.median(prevImg.arr) + 2*np.std(prevImg.arr)
+            _, prevMax = zScaleGetter.get_limits(prevImg.data)
 
         #*******************************
         # Update the displayed mask
@@ -170,27 +226,31 @@ def on_key(event):
         if os.path.isfile(thisMaskFile):
             # If the mask for this file exists, use it
             print('using this mask: ',os.path.basename(thisMaskFile))
-            maskImg = AstroImage(thisMaskFile)
+            maskImg = ai.ReducedScience.read(thisMaskFile)
         elif os.path.isfile(prevMaskFile) and (prevTarget == thisTarget):
             # Otherwise check for the mask for the previous file
             print('using previous mask: ',os.path.basename(prevMaskFile))
-            maskImg = AstroImage(prevMaskFile)
+            maskImg = ai.ReducedScience.read(prevMaskFile)
         elif os.path.isfile(nextMaskFile) and (nextTarget == thisTarget):
             # Then check for the mask of the next file
             print('using next mask: ',os.path.basename(nextMaskFile))
-            maskImg = AstroImage(nextMaskFile)
+            maskImg = ai.ReducedScience.read(nextMaskFile)
         else:
             # If none of those files exist, build a blank slate
             # Build a mask template (0 = not masked, 1 = masked)
             maskImg       = thisImg.copy()
             maskImg.filename = thisMaskFile
-            maskImg.arr   = maskImg.arr.astype(np.int16) * np.int16(0)
-            maskImg.dtype = np.byte
-            maskImg.header['BITPIX'] = 16
+            maskImg = maskImg.astype(np.int16)
+
+            # Make sure the uncertainty array is removed from the image
+            try:
+                del maskImg.uncertainty
+            except:
+                pass
 
         # Update contour plot (clear old lines redo contouring)
         axarr[1].collections = []
-        axarr[1].contour(xx, yy, maskImg.arr, levels=[0.5], colors='white', alpha = 0.2)
+        axarr[1].contour(xx, yy, maskImg.data, levels=[0.5], colors='white', alpha = 0.2)
 
         # Reassign image display limits
         prevAxImg.set_clim(vmin = prevMin, vmax = prevMax)
@@ -198,9 +258,9 @@ def on_key(event):
         nextAxImg.set_clim(vmin = nextMin, vmax = nextMax)
 
         # Display the new images
-        prevAxImg.set_data(prevImg.arr)
-        thisAxImg.set_data(thisImg.arr)
-        nextAxImg.set_data(nextImg.arr)
+        prevAxImg.set_data(prevImg.data)
+        thisAxImg.set_data(thisImg.data)
+        nextAxImg.set_data(nextImg.data)
 
         # Update the annotation
         axList = fig.get_axes()
@@ -227,18 +287,23 @@ def on_key(event):
         # Make sure the header has the right values
         maskImg.header = thisImg.header
 
+        # TODO: make sure the mask ONLY has what it needs
+        # i.e., remove uncertainty and convert to np.ubyte type.
+
         # Write the mask to disk
-        print('Writing mask for file ', os.path.basename(maskImg.filename))
-        maskImg.write()
+        maskBasename = os.path.basename(thisImg.filename)
+        maskFullname = os.path.join(maskDir, maskBasename)
+        print('Writing mask for file {}'.format(maskBasename))
+        maskImg.write(maskFullname, clobber=True)
 
     # Clear out the mask values
     if event.key == 'backspace':
         # Clear out the mask array
-        maskImg.arr = maskImg.arr * np.byte(0)
+        maskImg.data = maskImg.data * np.byte(0)
 
         # Update contour plot (clear old lines redo contouring)
         axarr[1].collections = []
-        axarr[1].contour(xx, yy, maskImg.arr, levels=[0.5], colors='white', alpha = 0.2)
+        axarr[1].contour(xx, yy, maskImg.data, levels=[0.5], colors='white', alpha = 0.2)
 
         # Update the display
         fig.canvas.draw()
@@ -273,42 +338,22 @@ brushSize = 3      # (5xbrushSize pix) is the size of the region masked
 # 2. Waveband
 # 3. Dither (pattern)
 # 4. Polaroid Angle
-fileIndexByTarget = fileIndex.group_by(['Dither', 'Target', 'Waveband', 'Pol Ang'])
+fileIndexByTarget = fileIndex.group_by(
+    ['TARGET', 'FILTER', 'POLPOS']
+)
 
-# Identify the "ON" and "OFF" images for each group,
-# and generate a final list of images that need masking
-fileList = []
-targetList = []
-for group in fileIndexByTarget.groups:
-    # Count the images
-    numImgs = len(group)
-
-    # Test if numImgs matches the ABBA pattern
-    if (numImgs % 4) != 0:
-        print('The ABBA pattern is not there...')
-        pdb.set_trace()
-    else:
-        # Get the on target listings for the filenames and target values
-        imgOnTarget   = [True, False, False, True]*np.int(numImgs/4)
-        onTargetFiles = (group['Filename'])[np.where(imgOnTarget)]
-        onTargetTargets = (group['Target'])[np.where(imgOnTarget)]
-
-        # Strip the leading and trailing spaces on the target names
-        for i, target in enumerate(onTargetTargets):
-            onTargetTargets[i] = target.strip()
-
-        # Add the information to the fileList and targetList variables
-        fileList.extend(onTargetFiles)
-        targetList.extend(onTargetTargets)
+# Add the information to the fileList and targetList variables
+fileList = fileIndexByTarget['FILENAME'].data.tolist()
+targetList = fileIndexByTarget['TARGET'].data.tolist()
 
 #*************************************
 # Now prepare to plot the first images
 #*************************************
 
 # Read in an image for masking
-prevImg = AstroImage(fileList[imgNum - 1])
-thisImg = AstroImage(fileList[imgNum])
-nextImg = AstroImage(fileList[imgNum + 1])
+prevImg = ai.ReducedScience.read(fileList[imgNum - 1])
+thisImg = ai.ReducedScience.read(fileList[imgNum])
+nextImg = ai.ReducedScience.read(fileList[imgNum + 1])
 
 # Log the targets of the curent panes
 prevTarget = targetList[imgNum - 1]
@@ -328,18 +373,16 @@ nextTarget = targetList[imgNum + 1]
 maskFile = os.path.join(maskDir, os.path.basename(thisImg.filename))
 if os.path.isfile(maskFile):
     # If the mask file exists, use it
-    maskImg = AstroImage(maskFile)
+    maskImg = ai.ReducedScience.read(maskFile)
 else:
     # If the mask file does not exist, build a blank slate
     # Build a mask template (0 = not masked, 1 = masked)
     maskImg       = thisImg.copy()
     maskImg.filename = maskFile
-    maskImg.arr   = maskImg.arr.astype(np.int16) * np.int16(0)
-    maskImg.dtype = np.byte
-    maskImg.header['BITPIX'] = 16
+    maskImg = maskImg.astype(np.int16)
 
 # Generate 2D X and Y position maps
-maskShape = maskImg.arr.shape
+maskShape = maskImg.shape
 grids     = np.mgrid[0:maskShape[0], 0:maskShape[1]]
 xx        = grids[1]
 yy        = grids[0]
@@ -348,24 +391,31 @@ yy        = grids[0]
 # Start by preparing a 1x3 plotting area
 fig, axarr = plt.subplots(1, 3, sharey=True)
 
+# Build the image scaling intervals
+zScaleGetter = ZScaleInterval()
+
 # Compute image count scaling
-prevMin = np.median(prevImg.arr) - 0.25*np.std(prevImg.arr)
-prevMax = np.median(prevImg.arr) + 2*np.std(prevImg.arr)
-thisMin = np.median(thisImg.arr) - 0.25*np.std(thisImg.arr)
-thisMax = np.median(thisImg.arr) + 2*np.std(thisImg.arr)
-nextMin = np.median(nextImg.arr) - 0.25*np.std(nextImg.arr)
-nextMax = np.median(nextImg.arr) + 2*np.std(nextImg.arr)
+prevMin, prevMax = zScaleGetter.get_limits(prevImg.data)
+thisMin, thisMax = zScaleGetter.get_limits(thisImg.data)
+nextMin, nextMax = zScaleGetter.get_limits(nextImg.data)
+
+# prevMin = np.median(prevImg.data) - 0.25*np.std(prevImg.data)
+# prevMax = np.median(prevImg.data) + 2*np.std(prevImg.data)
+# thisMin = np.median(thisImg.data) - 0.25*np.std(thisImg.data)
+# thisMax = np.median(thisImg.data) + 2*np.std(thisImg.data)
+# nextMin = np.median(nextImg.data) - 0.25*np.std(nextImg.data)
+# nextMax = np.median(nextImg.data) + 2*np.std(nextImg.data)
 
 # Populate each axis with its image
-tmpFig, tmpAx, prevAxImg = prevImg.show(axes = axarr[0], cmap='cubehelix',
+prevAxImg = prevImg.show(axes = axarr[0], cmap='viridis',
                                         vmin = prevMin, vmax = prevMax, noShow = True)
-tmpFig, tmpAx, thisAxImg = thisImg.show(axes = axarr[1], cmap='cubehelix',
+thisAxImg = thisImg.show(axes = axarr[1], cmap='viridis',
                                         vmin = thisMin, vmax = thisMax, noShow = True)
-tmpFig, tmpAx, nextAxImg = nextImg.show(axes = axarr[2], cmap='cubehelix',
+nextAxImg = nextImg.show(axes = axarr[2], cmap='viridis',
                                         vmin = nextMin, vmax = nextMax, noShow = True)
 
 # Add a contour of the mask array
-maskContour = axarr[1].contour(xx, yy, maskImg.arr,
+maskContour = axarr[1].contour(xx, yy, maskImg.data,
                                levels=[0.5], origin='lower', colors='white', alpha = 0.2)
 
 # Rescale the figure and setup the spacing between images
@@ -392,7 +442,7 @@ thisLabel = axarr[1].text(20, 875, thisStr,
                           color = 'white', size = 'medium')
 nextLabel = axarr[2].text(20, 875, nextStr,
                           color = 'white', size = 'medium')
-thisShape = thisImg.arr.shape
+thisShape = thisImg.shape
 redLines  = axarr[1].plot([thisShape[0]/2, thisShape[0]/2], [0, thisShape[1]],
                           '-r',
                           [0, thisShape[0]], [thisShape[1]/2, thisShape[1]/2],

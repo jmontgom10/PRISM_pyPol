@@ -1,29 +1,36 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jan 20 15:59:25 2015
-
-@author: jordan
+Computes the polarimetric efficiency (PE), position angle direction (+1 or -1),
+and position angle offset (DeltaPA) for the instrument.
 """
+# TODO: Should I find a way to use Python "Statsodr.Models" to do linear fitting
+# with uncertainties in X and Y?
 
-# Should I find a way to use Python "StatsModels" to do linear fitting with
-# uncertainties in X and Y?
-
+# Core imports
 import os
 import sys
 import copy
+
+# Scipy/numpy imports
 import numpy as np
-from astropy.wcs import WCS
+from scipy import odr
+
+# Import statsmodels for robust linear regression
+import statsmodels.api as smapi
+
+# Astropy imports
 from astropy.table import Table, Column, hstack, join
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clipped_stats
-from photutils import centroid_com, aperture_photometry, CircularAperture, CircularAnnulus
-from scipy.odr import *
-from matplotlib import pyplot as plt
-import pdb
+from photutils import (centroid_com, aperture_photometry, CircularAperture,
+    CircularAnnulus)
 
-# Add the AstroImage class
-from astroimage.astroimage import AstroImage
+# Import plotting utilities
+from matplotlib import pyplot as plt
+
+# Import the astroimage package
+import astroimage as ai
 
 # This script will compute the photometry of polarization standard stars
 # and output a file containing the polarization position angle
@@ -42,7 +49,7 @@ font = {'family': 'sans-serif',
         }
 
 # This is the location where all pyPol data will be saved
-pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data\\201501'
+pyPol_data = 'C:\\Users\\Jordan\\FITS_data\\PRISM_data\\pyPol_data\\201612'
 
 # This is the name of the file in which the calibration constants will be stored
 polCalConstantsFile = os.path.join(pyPol_data, 'polCalConstants.csv')
@@ -52,37 +59,14 @@ print('\nReading file index from disk')
 indexFile = os.path.join(pyPol_data, 'reducedFileIndex.csv')
 fileIndex = Table.read(indexFile, format='ascii.csv')
 
-# The user needs to specify the "Target" values associated with
-# calibration data in the fileIndex.
-targets = ['Taurus_Cal', 'Orion_Cal']
-
-# Define some useful conversion factors
-rad2deg = (180.0/np.pi)
-deg2rad = (np.pi/180.0)
-
-# Determine which parts of the fileIndex are usable
-useFiles = fileIndex['Use'] == 1
-
-# Further restrict the selection to only include the pre-selected targets
-targetFiles = np.array([False]*len(fileIndex), dtype=bool)
-for target in targets:
-    targetFiles = np.logical_or(targetFiles,
-                                fileIndex['Target'] == target)
-
-# Cull the fileIndex to ONLY include the specified calibration targets
-calFiles  = np.logical_and(useFiles, targetFiles)
-if np.sum(calFiles) > 0:
-    fileInds   = np.where(calFiles)
-    fileIndex = fileIndex[fileInds]
-
 # Group the fileIndex by waveband
-fileIndexByWaveband = fileIndex.group_by(['Waveband'])
+fileIndexByWaveband = fileIndex.group_by(['FILTER'])
 
 # Retrieve the waveband values within specified the calibration data
-wavebands = np.unique(fileIndexByWaveband['Waveband'])
+wavebands = np.unique(fileIndexByWaveband['FILTER'])
 
 # Initalize a table to store all the measured polarizatino calibration constants
-calTable = Table(names=('Waveband', 'PE', 's_PE', 'PAsign', 'dPA', 's_dPA'),
+calTable = Table(names=('FILTER', 'PE', 's_PE', 'PAsign', 'D_PA', 's_D_PA'),
                  dtype=('S1', 'f8', 'f8', 'i8', 'f8', 'f8'))
 
 # Also initalize a dictionary to store ALL of the polarization data
@@ -90,13 +74,13 @@ allPolCalDict = {}
 
 # Loop through each waveband and compute the calibration constants from the data
 # available for that waveband.
-for thisWaveband in wavebands:
+for thisFilter in wavebands:
     # Update the user on processing status
     print('\nProcessing calibration data for')
-    print('Waveband : {0}'.format(thisWaveband))
+    print('Filter : {0}'.format(thisFilter))
 
     # Define the polarization standard files
-    thisFilename = 'polStandardTable_{0}.csv'.format(thisWaveband)
+    thisFilename = 'polStandardTable_{0}.csv'.format(thisFilter)
     polTableFile = os.path.join(pyPol_data, thisFilename)
 
     # Read in the polarization calibration data file
@@ -106,7 +90,7 @@ for thisWaveband in wavebands:
     # Get PE value
     ###############
     # # Grab the column names of the polarization measurements
-    # polStart = lambda s: s.startswith('P_' + thisWaveband)
+    # polStart = lambda s: s.startswith('P_' + thisFilter)
     # polBool  = list(map(polStart, polCalTable.keys()))
     # polInds  = np.where(polBool)
     # polKeys  = np.array(polCalTable.keys())[polInds]
@@ -114,7 +98,7 @@ for thisWaveband in wavebands:
     # Initalize a dictionary to store all the calibration measurements
     tmpDict1 = {
         'value':[],
-        'sigma':[]}
+        'uncert':[]}
     tmpDict2 = {
         'expected':copy.deepcopy(tmpDict1),
         'measured':copy.deepcopy(tmpDict1)}
@@ -123,7 +107,7 @@ for thisWaveband in wavebands:
         'PA':copy.deepcopy(tmpDict2)}
 
     # Quickly build a list of calibration keys
-    calKeyList = ['_'.join([prefix, thisWaveband])
+    calKeyList = ['_'.join([prefix, thisFilter])
         for prefix in ['P', 'sP', 'PA', 'sPA']]
 
     # Loop over each row in the calibration data table
@@ -132,7 +116,7 @@ for thisWaveband in wavebands:
         standardTable = polCalTable[np.array([istandard])]
 
         # Trim off unnecessary rows before looping over what remains
-        standardTable.remove_columns(['Name', 'RA', 'Dec'])
+        standardTable.remove_columns(['Name', 'RA_1950', 'Dec_1950'])
 
         # Now loop over the remaining keys and
         for key in standardTable.keys():
@@ -159,7 +143,7 @@ for thisWaveband in wavebands:
 
             # Parse whether this is a value or an uncertainty
             if key.startswith('s'):
-                val_sig = 'sigma'
+                val_sig = 'uncert'
             else:
                 val_sig = 'value'
 
@@ -174,6 +158,65 @@ for thisWaveband in wavebands:
             polCalDict[dictKey]['measured'][val_sig].append(
                 standardTable[key].data.data[0])
 
+
+    ###################
+    # Identify Outliers
+    ###################
+    # Grab the FULL set of expected and measured polarization values
+    expectedPol         = np.array(polCalDict['P']['expected']['value'])
+    uncertInExpectedPol = np.array(polCalDict['P']['expected']['uncert'])
+    measuredPol         = np.array(polCalDict['P']['measured']['value'])
+    uncertInMeasuredPol = np.array(polCalDict['P']['measured']['uncert'])
+
+    # Run a statsmodels linear regression and test for outliers
+    OLSmodel = smapi.OLS(
+        expectedPol,
+        measuredPol,
+        hasconst=False
+    )
+    OLSregression = OLSmodel.fit()
+
+    # Find the outliers
+    outlierTest = OLSregression.outlier_test()
+    outlierBool = [t[2] < 0.5 for t in outlierTest]
+
+    # Grab the FULL set of expected and measured polarization values
+    expectedPA         = np.array(polCalDict['PA']['expected']['value'])
+    uncertInExpectedPA = np.array(polCalDict['PA']['expected']['uncert'])
+    measuredPA         = np.array(polCalDict['PA']['measured']['value'])
+    uncertInMeasuredPA = np.array(polCalDict['PA']['measured']['uncert'])
+
+    # Run a statsmodels linear regression and test for outliers
+    OLSmodel = smapi.OLS(
+        expectedPA,
+        measuredPA,
+        hasconst=True
+    )
+    OLSregression = OLSmodel.fit()
+
+    # Find the outliers
+    outlierTest = OLSregression.outlier_test()
+    outlierBool = np.logical_or(
+        outlierBool,
+        [t[2] < 0.5 for t in outlierTest]
+    )
+
+    # Cull the list of Ps and PAs
+    goodInds            = np.where(np.logical_not(outlierBool))
+    expectedPol         = expectedPol[goodInds]
+    uncertInExpectedPol = uncertInExpectedPol[goodInds]
+    measuredPol         = measuredPol[goodInds]
+    uncertInMeasuredPol = uncertInMeasuredPol[goodInds]
+    expectedPA          = expectedPA[goodInds]
+    uncertInExpectedPA  = uncertInExpectedPA[goodInds]
+    measuredPA          = measuredPA[goodInds]
+    uncertInMeasuredPA  = uncertInMeasuredPA[goodInds]
+
+    # TODO: print an update to the user on the polarization values culled
+
+    ###############
+    # Get PE value
+    ###############
     # Close any remaining plots before proceeding to show the user the graphical
     # summary of the calibration data.
     plt.close('all')
@@ -183,21 +226,22 @@ for thisWaveband in wavebands:
          return slope*x
 
     # Set up ODR with the model and data.
-    PEmodel = Model(PE)
-    data = RealData(
-        polCalDict['P']['expected']['value'],
-        polCalDict['P']['measured']['value'],
-        sx=polCalDict['P']['expected']['sigma'],
-        sy=polCalDict['P']['measured']['sigma'])
+    PEmodel = odr.Model(PE)
+    data = odr.RealData(
+        expectedPol,
+        measuredPol,
+        sx=uncertInExpectedPol,
+        sy=uncertInMeasuredPol
+    )
 
     # Initalize the full odr model object
-    odr = ODR(data, PEmodel, beta0=[1.])
+    odrObj = odr.ODR(data, PEmodel, beta0=[1.])
 
     # Run the regression.
-    PEout = odr.run()
+    PEout = odrObj.run()
 
     # Use the in-built pprint method to give us results.
-    print(thisWaveband + '-band PE fitting results')
+    print(thisFilter + '-band PE fitting results')
     PEout.pprint()
 
 
@@ -208,8 +252,8 @@ for thisWaveband in wavebands:
     ax.errorbar(
         polCalDict['P']['expected']['value'],
         polCalDict['P']['measured']['value'],
-        xerr=polCalDict['P']['expected']['sigma'],
-        yerr=polCalDict['P']['measured']['sigma'],
+        xerr=polCalDict['P']['expected']['uncert'],
+        yerr=polCalDict['P']['measured']['uncert'],
         ecolor='b', linestyle='None', marker=None)
     xlim = ax.get_xlim()
     ax.plot([0,max(xlim)], PE(PEout.beta[0], np.array([0,max(xlim)])), 'g')
@@ -221,7 +265,7 @@ for thisWaveband in wavebands:
     ylim = 0, ylim[1]
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
-    plt.title(thisWaveband + '-band Polarization Efficiency')
+    plt.title(thisFilter + '-band Polarization Efficiency')
 
     #Compute where the annotation should be placed
     ySpan = np.max(ylim) - np.min(ylim)
@@ -231,7 +275,7 @@ for thisWaveband in wavebands:
     plt.text(xtxt, ytxt, 'PE = {0:4.3g} +/- {1:4.3g}'.format(
         PEout.beta[0], PEout.sd_beta[0]), fontdict=font)
 
-    pdb.set_trace()
+    import pdb; pdb.set_trace()
 
     # Test if a polarization efficiency greater than one was retrieved...
     if PEout.beta[0] > 1.0:
@@ -242,32 +286,33 @@ for thisWaveband in wavebands:
     ###############
     # Get PA offset
     ###############
-    # Fit a model to the PA1_V vs. PA0_V data
+    # Fit a model to the PA1 vs. PA0 data
     # Define the model to be used in the fitting
     def deltaPA(B, x):
          return B[0]*x + B[1]
 
     # Set up ODR with the model and data.
-    deltaPAmodel = Model(deltaPA)
-    data = RealData(
-        polCalDict['PA']['expected']['value'],
-        polCalDict['PA']['measured']['value'],
-        sx=polCalDict['PA']['expected']['sigma'],
-        sy=polCalDict['PA']['measured']['sigma'])
+    deltaPAmodel = odr.Model(deltaPA)
+    data = odr.RealData(
+        expectedPA,
+        measuredPA,
+        sx=uncertInExpectedPA,
+        sy=uncertInMeasuredPA
+    )
 
     # On first pass, just figure out what the sign is
-    odr    = ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
-    dPAout = odr.run()
+    odrObj = odr.ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
+    dPAout = odrObj.run()
     PAsign = np.round(dPAout.beta[0])
 
     # Build the proper fitter class with the slope fixed
-    odr = ODR(data, deltaPAmodel, beta0=[PAsign, 90.0], ifixb=[0,1])
+    odrObj = odr.ODR(data, deltaPAmodel, beta0=[PAsign, 90.0], ifixb=[0,1])
 
     # Run the regression.
-    dPAout = odr.run()
+    dPAout = odrObj.run()
 
     # Use the in-built pprint method to give us results.
-    print(thisWaveband + '-band delta PA fitting results')
+    print(thisFilter + '-band delta PA fitting results')
     dPAout.pprint()
 
     # For ease of reference, convert the expected and measured values to arrays
@@ -291,11 +336,14 @@ for thisWaveband in wavebands:
         PAcor[np.where(PAplus)] = PAcor[np.where(PAplus)] + 180
 
     # Do a final regression to plot-test if things are right
-    data = RealData(PA0, PAcor,
-        sx=polCalDict['PA']['expected']['sigma'],
-        sy=polCalDict['PA']['measured']['sigma'])
-    odr    = ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
-    dPAcor = odr.run()
+    data = odr.RealData(
+        PA0,
+        PAcor,
+        sx=polCalDict['PA']['expected']['uncert'],
+        sy=polCalDict['PA']['measured']['uncert']
+    )
+    odrObj    = odr.ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
+    dPAcor = odrObj.run()
 
     # Plot up the results
     # PA measured vs. PA true
@@ -306,8 +354,8 @@ for thisWaveband in wavebands:
     #    ecolor='b', linestyle='None', marker=None)
     #ax.plot([0,max(PA0_V)], deltaPA(dPAout.beta, np.array([0,max(PA0_V)])), 'g')
     ax.errorbar(PA0, PAcor,
-        xerr=polCalDict['PA']['expected']['sigma'],
-        yerr=polCalDict['PA']['measured']['sigma'],
+        xerr=polCalDict['PA']['expected']['uncert'],
+        yerr=polCalDict['PA']['measured']['uncert'],
         ecolor='b', linestyle='None', marker=None)
     xlim = ax.get_xlim()
     ax.plot([0,max(xlim)], deltaPA(dPAcor.beta, np.array([0, max(xlim)])), 'g')
@@ -317,7 +365,7 @@ for thisWaveband in wavebands:
     ylim = ax.get_ylim()
     xlim = 0, xlim[1]
     ax.set_xlim(xlim)
-    plt.title(thisWaveband + '-band PA offset')
+    plt.title(thisFilter + '-band PA offset')
 
     #Compute where the annotation should be placed
     ySpan = np.max(ylim) - np.min(ylim)
@@ -332,11 +380,11 @@ for thisWaveband in wavebands:
     # Now that all the calibration constants have been estimated and the results
     # shown to the user (in theory for their sanity-test approval), store the
     # final calibration data in the calTable variable
-    calTable.add_row([thisWaveband, PEout.beta[0], PEout.sd_beta[0],
+    calTable.add_row([thisFilter, PEout.beta[0], PEout.sd_beta[0],
                       np.int(PAsign), dPAout.beta[1], dPAout.sd_beta[1]])
 
     # Store a copy of polCalDict in allPolCalDict
-    allPolCalDict[thisWaveband] = copy.deepcopy(polCalDict)
+    allPolCalDict[thisFilter] = copy.deepcopy(polCalDict)
 
 # Now double check if the PA offsets are agreeable. If not, keep them separate,
 # but otherwise attempt to combine them...
@@ -344,8 +392,8 @@ for thisWaveband in wavebands:
 # Check if a single deltaPA value is appropriate
 #####################################################
 # Extract the originally estimated dPA values from the table
-dPAvalues = calTable['dPA'].data
-dPAsigmas = calTable['s_dPA'].data
+dPAvalues = calTable['D_PA'].data
+dPAsigmas = calTable['s_D_PA'].data
 
 # Compute all possible differences in dPAs and their uncertainties
 D_dPAmatrix   = np.zeros(2*dPAvalues.shape)
@@ -370,21 +418,21 @@ else:
     for key, val in allPolCalDict.items():
         PA0.extend(val['PA']['expected']['value'])
         PA1.extend(val['PA']['measured']['value'])
-        sPA0.extend(val['PA']['expected']['sigma'])
-        sPA1.extend(val['PA']['measured']['sigma'])
+        sPA0.extend(val['PA']['expected']['uncert'])
+        sPA1.extend(val['PA']['measured']['uncert'])
 
     # Do a final regression to plot-test if things are right
-    data = RealData(PA0, PA1, sx=sPA0, sy=sPA1)
+    data = odr.RealData(PA0, PA1, sx=sPA0, sy=sPA1)
     # On first pass, just figure out what the sign is
-    odr    = ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
-    dPAout = odr.run()
+    odrObj    = odr.ODR(data, deltaPAmodel, beta0=[0.0, 90.0])
+    dPAout = odrOjb.run()
     PAsign = np.round(dPAout.beta[0])
 
     # Build the proper fitter class with the slope fixed
-    odr = ODR(data, deltaPAmodel, beta0=[PAsign, 90.0], ifixb=[0,1])
+    odrObj = odr.ODR(data, deltaPAmodel, beta0=[PAsign, 90.0], ifixb=[0,1])
 
     # Run the regression.
-    dPAout = odr.run()
+    dPAout = odrObj.run()
 
     # Use the in-built pprint method to give us results.
     print('Final delta PA fitting results')
@@ -407,9 +455,9 @@ else:
     # PAcor_R = PAcor.copy()
 
     # Do a final regression to plot-test if things are right
-    data = RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
-    odr  = ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
-    dPAcor = odr.run()
+    data = odr.RealData(PA0, PAcor, sx=sPA0, sy=sPA1)
+    odrObj  = odr.ODR(data, deltaPAmodel, beta0=[1.0, 0.0], ifixb=[0,1])
+    dPAcor = odrObj.run()
 
     # Plot up the results
     # PA measured vs. PA true
@@ -447,8 +495,8 @@ else:
     plt.ioff()
 
     # Update the calibration table
-    calTable['dPA']   = dPAout.beta[1]
-    calTable['s_dPA'] = dPAout.sd_beta[1]
+    calTable['D_PA']   = dPAout.beta[1]
+    calTable['s_D_PA'] = dPAout.sd_beta[1]
 
 print('Writing calibration data to disk')
 calTable.write(polCalConstantsFile, format='ascii.csv')

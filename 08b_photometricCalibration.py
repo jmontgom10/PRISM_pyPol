@@ -1184,8 +1184,8 @@ for group in fileIndexByTarget.groups:
         img2a = img2*CF2_2
 
         # Grab the pixel area to include in the linear scaling constants
-        wcs1        = WCS(img1.header)
-        wcs2        = WCS(img2.header)
+        wcs1     = WCS(img1.header)
+        wcs2     = WCS(img2.header)
 
         # Store the linear scaling constants in the "BSCALE" keyword
         BSCALE1  = zeroFlux[band1]*CF1_1

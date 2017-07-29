@@ -168,7 +168,7 @@ def USNOB_R(magDict):
     return (Rmag, sig_Rmag)
 
 def USNOB_VR(magDict):
-    '''Computes the V-R  color for a USNO-B1.0 star basded emulsion magnitude
+    '''Computes the V-R  color for a USNO-B1.0 star based emulsion magnitude
     values. Returns a tuple containing (V-R, sigma_V-R).
     '''
     # Grab the magnitudes needed for this transformation
@@ -236,6 +236,76 @@ def USNOB_VR(magDict):
 
     # Return the final values
     return (V_R, sig_VR)
+
+
+#******************************************************************************
+# Define a photometric transform to compute R-band magnitudes
+#******************************************************************************
+def APASS_V(magDict):
+    '''
+    Computes the V-band magnitude from APASS V and B-V magnitudes.
+
+    In this case, the most accurate estimate *IS* the APASS V-band magnitude.
+    '''
+    Vmag     = np.array(magDict['Vmag'])
+    sig_Vmag = np.array(magDict['e_Vmag'])
+
+    return (Vmag, sig_Vmag)
+
+def APASS_R(magDict):
+    '''Computes the R-band magnitude from APASS sloan magnitudes'''
+    # 1) BGrab the magnitudes needed for this transformation
+    g_mag   = np.array(magDict['g_mag'])
+    s_g_mag = np.array(magDict['e_g_mag'])
+    r_mag   = np.array(magDict['r_mag'])
+    s_r_mag = np.array(magDict['e_r_mag'])
+
+    # 2) Compute the sloan bands color
+    ga_ra     = g_mag - r_mag
+    sig_ga_ra = np.sqrt(s_g_mag**2 + s_r_mag**2)
+
+    # 3) Compute the value and uncertainty of (Rl - r_a) in the relation...
+    # (Rl - r_a) = a1 + a2*(g_a - r_a)
+    a1    = -0.143307088
+    a2    = -1.112865077
+    Rl_ra = a1 + a2*(ga_ra)
+
+    # The variance-covariance matrix for the relation
+    # [[sig_m^2,         rho*sig_m*sig_b],
+    #  [rho*sig_m*sig_b, sig_b^2        ]]
+    # [[ 3.93e-5 -1.97e-5]
+    #  [-1.97e-5  1.79e-5]]
+
+    # Do the error-propagation for (Rl - r_a) by hand...
+    sig_m2    = 3.93489486155285e-5
+    sig_b2    = 1.79279902874194e-5
+    rhosmsb   = -1.96807984258731e-5
+    sig_Rlra  = np.sqrt(sig_m2*(ga_ra**2) + sig_b2 + 2*rhosmsb*ga_ra + (a2*sig_ga_ra)**2)
+
+    # Compute the R-band magnitude by adding the r_mag and propagate uncertainty
+    Rmag     = Rl_ra + r_mag
+    sig_Rmag = np.sqrt(sig_Rlra**2 + s_r_mag**2)
+
+    # #### OK, here is where I need to compute the R-band magnitude from the
+    # #### OTHER side using (V - r) ...
+    # #### That is possible but probably not necessary.
+
+    # Return the final values
+    return (Rmag, sig_Rmag)
+
+def APASS_VR(magDict):
+    """Computes the V-R magnitude from APASS catalog entries"""
+    # Compute the APASS V-mag
+    Vmag, s_Vmag = APASS_V(magDict)
+
+    # Compute the APASS R-mag
+    Rmag, s_Rmag = APASS_R(magDict)
+
+    # Compute the APASS V-R color
+    VRmag     = Vmag - Rmag
+    sig_VRmag = np.sqrt(s_Vmag**2 + s_Rmag**2)
+
+    return (VRmag, sig_VRmag)
 
 ################################################################################
 ############## DEFINE A FUNCTION TO PERFORM THE BASIC, LINEAR FIT ##############
@@ -308,7 +378,7 @@ def MCMCfunc(data, bounds, n_walkers=100, n_burn_in_steps=250, n_steps=1000):
 
     # The "foreground" linear likelihood:
     def ln_like_fg(params, x, y, sx, sy):
-        theta, b_perp, _, _, _, _, _ = params
+        theta, b_perp = params
 
         # The following terms allow us to skip over the matrix algebra in the Loop
         # below. These are the absolute value of the components of a unit vector
@@ -332,75 +402,81 @@ def MCMCfunc(data, bounds, n_walkers=100, n_burn_in_steps=250, n_steps=1000):
         # Return the sum of the ln_likelihoods (product in linear space)
         return out
 
-    # The "background" outlier likelihood:
-    # (For a complete, generalized, covariance matrix treatment, see the file
-    # "HBL_exer_14_with_outlier_covariance.py")
-    def ln_like_bg(params, x, y, sx, sy):
-        theta, b_perp, Mx, Pb, lnVx, My, lnVy = params
+    # # The "background" outlier likelihood:
+    # # (For a complete, generalized, covariance matrix treatment, see the file
+    # # "HBL_exer_14_with_outlier_covariance.py")
+    # def ln_like_bg(params, x, y, sx, sy):
+    #     theta, b_perp, Mx, Pb, lnVx, My, lnVy = params
+    #
+    #     sinT = np.sin(theta)
+    #     cosT = np.cos(theta)
+    #
+    #     # Build the orthogonal-to-line unit vector (and its transpose)
+    #     v_vecT = np.matrix([-sinT, cosT])
+    #     v_vec  = v_vecT.T
+    #
+    #     # In parameter terms, "Vx" is the actual variance along the x-axis
+    #     # *NOT* the variance along the eigen-vector. Using this assumption, and
+    #     # forcing the outlier distribution tilt-angle to be equal to the main
+    #     # distribution tilt angle, we get...
+    #     sxOut, syOut, rhoxy = convert_angle_to_covariance(
+    #         np.exp(lnVx), np.exp(lnVy), theta)
+    #
+    #     # Compute the elements of the convolved covariance matrix
+    #     # # The old way...
+    #     # out_cov_matrix = build_cov_matrix(sxOut, syOut, rhoxy)
+    #     # data_cov_matrix = np.array([build_cov_matrix(np.sqrt(2*0.25), syi, 0) for syi in sy])
+    #     # testList = []
+    #     # for data_cov_mat1 in data_cov_matrix:
+    #     #     conv_cov_matrix = out_cov_matrix + data_cov_mat1
+    #     #     testList.append((v_vecT.dot(conv_cov_matrix).dot(v_vec))[0,0])
+    #     # Si2test = np.array(testList)
+    #
+    #     # The fast way...
+    #     conv_cov_matrix11 = sxOut**2 + sx**2
+    #     conv_cov_matrix12 = rhoxy*sxOut*syOut
+    #     conv_cov_matrix22 = syOut**2 + sy**2
+    #
+    #     # Now get the projection of the covariance matrix along the direction
+    #     # orthogonal to the line
+    #     Si2 = (-sinT*(-sinT*conv_cov_matrix11 + cosT*conv_cov_matrix12) +
+    #            cosT*(-sinT*conv_cov_matrix12 + cosT*conv_cov_matrix22))
+    #
+    #     # Compute the distances between the data and the line can do it all at once.
+    #     Di = cosT*y - sinT*x - b_perp
+    #
+    #     out = -0.5*(((Di**2)/Si2) + np.log(Si2))
+    #
+    #     if np.sum(np.isnan(out)) > 0: pdb.set_trace()
+    #
+    #     # Return the ln_likelihood of the background model given these-data points
+    #     # Equally likely for ALL data-points
+    #     return out
 
-        sinT = np.sin(theta)
-        cosT = np.cos(theta)
-
-        # Build the orthogonal-to-line unit vector (and its transpose)
-        v_vecT = np.matrix([-sinT, cosT])
-        v_vec  = v_vecT.T
-
-        # In parameter terms, "Vx" is the actual variance along the x-axis
-        # *NOT* the variance along the eigen-vector. Using this assumption, and
-        # forcing the outlier distribution tilt-angle to be equal to the main
-        # distribution tilt angle, we get...
-        sxOut, syOut, rhoxy = convert_angle_to_covariance(
-            np.exp(lnVx), np.exp(lnVy), theta)
-
-        # Compute the elements of the convolved covariance matrix
-        # # The old way...
-        # out_cov_matrix = build_cov_matrix(sxOut, syOut, rhoxy)
-        # data_cov_matrix = np.array([build_cov_matrix(np.sqrt(2*0.25), syi, 0) for syi in sy])
-        # testList = []
-        # for data_cov_mat1 in data_cov_matrix:
-        #     conv_cov_matrix = out_cov_matrix + data_cov_mat1
-        #     testList.append((v_vecT.dot(conv_cov_matrix).dot(v_vec))[0,0])
-        # Si2test = np.array(testList)
-
-        # The fast way...
-        conv_cov_matrix11 = sxOut**2 + sx**2
-        conv_cov_matrix12 = rhoxy*sxOut*syOut
-        conv_cov_matrix22 = syOut**2 + sy**2
-
-        # Now get the projection of the covariance matrix along the direction
-        # orthogonal to the line
-        Si2 = (-sinT*(-sinT*conv_cov_matrix11 + cosT*conv_cov_matrix12) +
-               cosT*(-sinT*conv_cov_matrix12 + cosT*conv_cov_matrix22))
-
-        # Compute the distances between the data and the line can do it all at once.
-        Di = cosT*y - sinT*x - b_perp
-
-        out = -0.5*(((Di**2)/Si2) + np.log(Si2))
-
-        if np.sum(np.isnan(out)) > 0: pdb.set_trace()
-
-        # Return the ln_likelihood of the background model given these-data points
-        # Equally likely for ALL data-points
-        return out
+    # # Define a likelihood function for the parameters and data
+    # def ln_like(params, x, y, sx, sy):
+    #     # Unpack the parameters
+    #     _, _, Pb, Mx, lnVx, My, lnVy = params
+    #
+    #     # Compute the vector of foreground likelihoods and include the Pb prior.
+    #     natLogLike_fg = ln_like_fg(params, x, y, sx, sy)
+    #     arg1 = natLogLike_fg + np.log(1.0 - Pb)
+    #
+    #     # Compute the vector of background likelihoods and include the Pb prior.
+    #     natLogLike_bg = ln_like_bg(params, x, y, sx, sy)
+    #     arg2 = natLogLike_bg + np.log(Pb)
+    #
+    #     # Combine these using log-add-exp for numerical stability.
+    #     natLogLike = np.sum(np.logaddexp(arg1, arg2))
+    #
+    #     # Include a second output as "blobs"
+    #     return natLogLike, (arg1, arg2)
 
     # Define a likelihood function for the parameters and data
     def ln_like(params, x, y, sx, sy):
-        # Unpack the parameters
-        _, _, Pb, Mx, lnVx, My, lnVy = params
-
-        # Compute the vector of foreground likelihoods and include the Pb prior.
-        natLogLike_fg = ln_like_fg(params, x, y, sx, sy)
-        arg1 = natLogLike_fg + np.log(1.0 - Pb)
-
-        # Compute the vector of background likelihoods and include the Pb prior.
-        natLogLike_bg = ln_like_bg(params, x, y, sx, sy)
-        arg2 = natLogLike_bg + np.log(Pb)
-
-        # Combine these using log-add-exp for numerical stability.
-        natLogLike = np.sum(np.logaddexp(arg1, arg2))
 
         # Include a second output as "blobs"
-        return natLogLike, (arg1, arg2)
+        return np.sum(ln_like_fg(params, x, y, sx, sy))
 
     # Now we need to actually APPLY Baye's rule to construct the log-proability
     # function. This is simply the log of the product of the prior and
